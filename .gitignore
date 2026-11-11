@@ -15,3 +15,5 @@
 *.[vV][hH]
 *.00
 *.[tT][mM][sS]
+*.DS_Store
+.DS_Store

@@ -9,6 +9,7 @@
 		<script src="Sceneview.js?v=double-click-center"></script>
 		<script src="MapDecode.js"></script>
 		<script src="ObjDecode.js"></script>
+		<script src="Rr4Decode.js"></script>
 		<script src="MapVram.js"></script>
 		<script src="MapView.js"></script>
 		<style>
@@ -27,6 +28,8 @@
 			fieldset { display: grid; gap: 12px; margin: 0 0 18px; padding: 0; border: 0; }
 			legend { margin-bottom: 12px; color: #8edbc9; font-size: 12px; font-weight: 700; text-transform: uppercase; }
 			label { display: grid; gap: 5px; color: #b7c8c5; font-size: 12px; }
+			#rr4CourseControls, #rr4RawControls { display: grid; gap: 12px; }
+			#rr4RawControls summary { color: #b7c8c5; cursor: pointer; font-size: 12px; }
 			input, select, button { width: 100%; min-height: 36px; border: 1px solid #405557; border-radius: 4px; background: #10191b; color: #e4efed; font: inherit; }
 			input, select { padding: 7px 9px; }
 			input[type="file"] { min-height: auto; padding: 7px; font-size: 11px; }
@@ -53,6 +56,7 @@
 					<select id="sourceMode">
 						<option value="mdl">Gran Turismo · DESERT.MDL</option>
 						<option value="map" selected>Ridge Racer 1 · MAP.RRM</option>
+						<option value="rr4">Ridge Racer Type 4 · R4.BIN</option>
 					</select>
 				</fieldset>
 				<fieldset>
@@ -70,22 +74,45 @@
 					<label for="indexFile">Ou fichier IDX.HED depuis le disque</label>
 					<input id="indexFile" type="file">
 				</fieldset>
-				<fieldset>
-					<legend>Bloc / objet</legend>
-					<label for="objectId">Indice</label>
-					<input id="objectId" type="number" min="0" max="257" step="1" value="0">
-					<button id="loadObject" type="button">Charger le bloc / objet</button>
+				<fieldset id="objectControls">
+					<legend id="objectLegend">Bloc / objet</legend>
+					<div id="objectIdControls">
+						<label for="objectId">Indice</label>
+						<input id="objectId" type="number" min="0" max="257" step="1" value="0">
+						<button id="loadObject" type="button">Charger le bloc / objet</button>
+					</div>
+					<div id="rr4CourseControls" hidden>
+						<label for="rr4Course">Circuit Ridge Racer Type 4</label>
+						<select id="rr4Course">
+							<option value="0">Circuit 1</option>
+							<option value="1">Circuit 2</option>
+							<option value="2">Circuit 3</option>
+							<option value="3">Circuit 4</option>
+							<option value="4">Circuit 5</option>
+							<option value="5">Circuit 6</option>
+							<option value="6">Circuit 7</option>
+							<option value="7">Circuit 8</option>
+						</select>
+						<button id="rr4LoadCourse" type="button">Afficher le circuit</button>
+					</div>
+					<details id="rr4RawControls" hidden>
+						<summary>Extraire une ressource brute</summary>
+						<label for="rr4ResourceId">Indice de ressource</label>
+						<input id="rr4ResourceId" type="number" min="0" max="933" step="1" value="0">
+						<button id="rr4Extract" type="button">Télécharger le chunk</button>
+					</details>
 					<button id="loadCircuit" type="button">Charger le circuit complet</button>
 					<p id="mapWarning">Placement des sections depuis IDX.HED. Certaines surfaces et variantes du circuit peuvent se superposer.</p>
 					<p id="buildingStatus" role="status"></p>
+					<p id="rr4Status" role="status" hidden></p>
 				</fieldset>
-				<fieldset>
+				<fieldset id="cameraControls">
 					<legend>Caméra</legend>
 					<button id="topView" type="button">Vue de dessus</button>
 					<p>Double-clique sur le circuit pour y centrer la caméra.</p>
 					<p id="skyStatus" role="status"></p>
 				</fieldset>
-				<fieldset>
+				<fieldset id="renderControls">
 					<legend>Rendu</legend>
 					<label for="renderMode">Mode</label>
 					<select id="renderMode">
@@ -96,6 +123,16 @@
 						<option value="texture">Texture TMS · expérimental</option>
 						<option value="textureSun" selected>Texture TMS · soleil</option>
 					</select>
+				</fieldset>
+				<fieldset id="rr4RenderControls" hidden>
+					<legend>Rendu</legend>
+					<label for="rr4RenderMode">Mode</label>
+					<select id="rr4RenderMode">
+						<option value="wireframe">Wireframe</option>
+						<option value="shaded" selected>Shaded</option>
+						<option value="textured">Textured · expérimental</option>
+					</select>
+					<p id="rr4RenderStatus" role="status"></p>
 				</fieldset>
 				<fieldset id="textureControls" hidden>
 					<legend>Texture</legend>
@@ -136,10 +173,11 @@
 			var m_tmsImages = [];
 			var m_sourceType = "";
 			var m_mapSectors = null;
+			var m_rr4Resources = null;
 			var m_textureRequest = 0;
 			var m_mapTextures = [];
 			var m_sourceRequest = 0;
-			var m_modePaths = { mdl: "DESERT.MDL", map: "ridge_racer/MAP.RRM" };
+			var m_modePaths = { mdl: "DESERT.MDL", map: "ridge_racer/MAP.RRM", rr4: "ridge_racer_4/R4.BIN" };
 
 			function disposeMeshMaterial(material) {
 				if (!material)
@@ -582,7 +620,20 @@
 			}
 
 			async function loadSource(buffer, name, request, mode) {
-				if (mode === "map" && /\.RRM$/i.test(name)) {
+				if (mode === "rr4" && /\.BIN$/i.test(name)) {
+					var resources = Rr4Decode.parse(buffer);
+					if (request !== m_sourceRequest || mode !== document.getElementById("sourceMode").value)
+						return;
+					m_textureRequest++;
+					m_buffer = buffer;
+					m_mapSectors = null;
+					m_rr4Resources = resources;
+					m_sourceType = "rr4";
+					document.getElementById("objectId").max = resources.length - 1;
+					document.getElementById("rr4ResourceId").max = resources.length - 1;
+					document.getElementById("rr4Status").textContent = resources.length + " ressources indexées dans R4.BIN. Sélectionne un indice pour extraire son secteur.";
+					loadRr4Course();
+				} else if (mode === "map" && /\.RRM$/i.test(name)) {
 					var sectors = MapDecode.parse(buffer);
 					var indexFile = document.getElementById("indexFile").files[0];
 					var indexBuffer;
@@ -610,11 +661,201 @@
 					m_textureRequest++;
 					m_buffer = buffer;
 					m_mapSectors = null;
+					m_rr4Resources = null;
 					m_sourceType = "mdl";
 					document.getElementById("objectId").max = 127;
 					loadMdlCircuit();
 				} else {
-					throw new Error(mode === "mdl" ? "Gran Turismo accepte uniquement les fichiers .MDL." : "Ridge Racer 1 accepte uniquement les fichiers .RRM.");
+					var message = mode === "mdl" ? "Gran Turismo accepte uniquement les fichiers .MDL." :
+						mode === "rr4" ? "Ridge Racer Type 4 accepte uniquement l'archive R4.BIN." :
+						"Ridge Racer 1 accepte uniquement les fichiers .RRM.";
+					throw new Error(message);
+				}
+			}
+
+			function renderRr4Course(courseId) {
+				var courseData = Rr4Decode.parseCourse(Rr4Decode.extract(m_buffer, m_rr4Resources, courseId * 2 + 1));
+				var routeData = Rr4Decode.parseTrackResource(Rr4Decode.extract(m_buffer, m_rr4Resources, Rr4Decode.trackResourceBase + courseId));
+				var samples = courseData.samples;
+				if (routeData.sampleCount !== samples.length)
+					throw new Error("Le nombre d'échantillons du circuit ne correspond pas à sa ressource de tracé.");
+				var geometry = new THREE.Geometry();
+				var routePositionScale = 4; // Route centers are quarter-scale versus object-node coordinates.
+				var minimum = new THREE.Vector3(Infinity, Infinity, Infinity);
+				var maximum = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
+				function addVertex(sample, edge) {
+					var point = new THREE.Vector3(
+						sample.x * routePositionScale + edge[0],
+						sample.height,
+						sample.z * routePositionScale + edge[1]
+					);
+					geometry.vertices.push(point);
+					minimum.min(point);
+					maximum.max(point);
+				}
+				var textureDistance = 0;
+				for (var index = 0; index < samples.length; index++) {
+					var current = samples[index];
+					var next = samples[(index + 1) % samples.length];
+					var base = geometry.vertices.length;
+					var currentV = textureDistance / 512;
+					textureDistance += Math.max(0, current.segmentLength) * routePositionScale;
+					var nextV = textureDistance / 512;
+					addVertex(current, current.right);
+					addVertex(current, current.left);
+					addVertex(next, next.right);
+					addVertex(next, next.left);
+					geometry.faces.push(new THREE.Face3(base, base + 1, base + 2));
+					geometry.faces.push(new THREE.Face3(base + 1, base + 3, base + 2));
+					geometry.faceVertexUvs[0].push([
+						new THREE.Vector2(0, currentV),
+						new THREE.Vector2(1, currentV),
+						new THREE.Vector2(0, nextV)
+					]);
+					geometry.faceVertexUvs[0].push([
+						new THREE.Vector2(1, currentV),
+						new THREE.Vector2(1, nextV),
+						new THREE.Vector2(0, nextV)
+					]);
+				}
+				geometry.computeFaceNormals();
+				geometry.computeVertexNormals();
+				geometry.computeBoundingSphere();
+				var mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({
+					color: 0x777d7d,
+					side: THREE.DoubleSide
+				}));
+				mesh.userData.rr4Road = true;
+				var group = new THREE.Object3D();
+				group.add(mesh);
+				group.userData.minimum = minimum.clone();
+				group.userData.maximum = maximum.clone();
+				group.userData.summary = "Ridge Racer Type 4 · Circuit " + (courseId + 1) +
+					" · " + samples.length + " échantillons · ruban routier uniquement";
+				if (m_sourceType === "rr4")
+					disposeRr4Meshes();
+				if (m_object)
+					m_viewer.remove(m_object);
+				m_object = group;
+				m_triangleObjects = [mesh];
+				m_viewer.scene.add(group);
+				m_viewer.fitToBounds(minimum, maximum);
+				applyRr4RenderMode();
+				document.getElementById("rr4Status").textContent = group.userData.summary +
+					" · décor non extrait : le fichier d'objets regroupe plusieurs types, dont des objets animés.";
+				setStatus(group.userData.summary, false);
+			}
+
+			function createRr4RoadTexture() {
+				var width = 64;
+				var height = 128;
+				var pixels = new Uint8Array(width * height * 4);
+				for (var y = 0; y < height; y++) {
+					for (var x = 0; x < width; x++) {
+						var edge = x < 4 || x >= width - 4;
+						var curbStripe = edge && (Math.floor(y / 8) % 2 === 0);
+						var centerMarking = x >= 30 && x < 34 && y % 32 < 12;
+						var noise = ((x * 17 + y * 31 + (x * y) % 23) % 17) - 8;
+						var shade = centerMarking ? 184 + noise : curbStripe ? 157 + noise : 67 + noise;
+						var pixel = (y * width + x) * 4;
+						pixels[pixel] = curbStripe ? (Math.floor(y / 8) % 2 === 0 ? shade : 100 + noise) : shade;
+						pixels[pixel + 1] = curbStripe ? (Math.floor(y / 8) % 2 === 0 ? shade : 48 + noise) : shade;
+						pixels[pixel + 2] = curbStripe ? (Math.floor(y / 8) % 2 === 0 ? shade : 43 + noise) : shade;
+						pixels[pixel + 3] = 255;
+					}
+				}
+				var texture = new THREE.DataTexture(pixels, width, height, THREE.RGBAFormat, THREE.UnsignedByteType);
+				texture.wrapS = THREE.RepeatWrapping;
+				texture.wrapT = THREE.RepeatWrapping;
+				texture.magFilter = THREE.LinearFilter;
+				texture.minFilter = THREE.LinearFilter;
+				texture.generateMipmaps = false;
+				texture.flipY = false;
+				texture.needsUpdate = true;
+				return texture;
+			}
+
+			function disposeRr4Meshes() {
+				m_triangleObjects.forEach(function(mesh) {
+					if (mesh.userData.rr4Texture)
+						mesh.userData.rr4Texture.dispose();
+					disposeMeshMaterial(mesh.material);
+				});
+			}
+
+			function applyRr4RenderMode() {
+				var mode = document.getElementById("rr4RenderMode").value;
+				var texture = mode === "textured" ? createRr4RoadTexture() : null;
+				m_triangleObjects.forEach(function(mesh) {
+					if (mesh.userData.rr4Texture)
+						mesh.userData.rr4Texture.dispose();
+					mesh.userData.rr4Texture = null;
+					disposeMeshMaterial(mesh.material);
+					if (mode === "wireframe") {
+						mesh.material = new THREE.MeshBasicMaterial({
+							color: 0xd8e5e3, wireframe: true, side: THREE.DoubleSide
+						});
+					} else {
+						var options = {
+							color: mesh.userData.rr4Road ? 0xc8ccce : 0xffffff,
+							side: THREE.DoubleSide
+						};
+						if (mesh.userData.rr4VertexColors)
+							options.vertexColors = THREE.VertexColors;
+						if (mode === "textured" && mesh.userData.rr4Road) {
+							mesh.geometry.uvsNeedUpdate = true;
+							mesh.geometry.__directGeometry = undefined;
+							options.color = 0xffffff;
+							options.map = texture;
+							mesh.userData.rr4Texture = texture;
+						}
+						mesh.material = new THREE.MeshLambertMaterial(options);
+					}
+				});
+				var description = mode === "wireframe" ? "Wireframe" :
+					mode === "shaded" ? "Shaded · couleurs de primitives décodées" :
+					"Textured · route procédurale, décors sans textures originales";
+				document.getElementById("rr4RenderStatus").textContent = description;
+				if (m_object && m_object.userData.summary)
+					setStatus(m_object.userData.summary + " · " + description, false);
+			}
+
+			function loadRr4Course() {
+				try {
+					if (!m_buffer || !m_rr4Resources)
+						throw new Error("Charge d'abord l'archive R4.BIN.");
+					var courseId = Number(document.getElementById("rr4Course").value);
+					if (!Number.isInteger(courseId) || courseId < 0 || courseId >= Rr4Decode.courseCount)
+						throw new Error("L'indice du circuit doit être compris entre 0 et " + (Rr4Decode.courseCount - 1) + ".");
+					renderRr4Course(courseId);
+				} catch (error) {
+					document.getElementById("rr4Status").textContent = error.message;
+					setStatus(error.message, true);
+				}
+			}
+
+			function extractRr4Resource() {
+				try {
+					if (!m_buffer || !m_rr4Resources)
+						throw new Error("Charge d'abord l'archive R4.BIN.");
+					var id = Number(document.getElementById("rr4ResourceId").value);
+					if (!Number.isInteger(id) || id < 0 || id >= m_rr4Resources.length)
+						throw new Error("L'indice de ressource doit être compris entre 0 et " + (m_rr4Resources.length - 1) + ".");
+					var resource = m_rr4Resources[id];
+					var blob = new Blob([Rr4Decode.extract(m_buffer, m_rr4Resources, id)], { type: "application/octet-stream" });
+					var url = URL.createObjectURL(blob);
+					var link = document.createElement("a");
+					link.href = url;
+					link.download = "R4.BIN." + String(id).padStart(5, "0");
+					link.click();
+					setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
+					var type = resource.type === null ? "inconnu" : resource.type;
+					var message = link.download + " · " + resource.size + " octets · type " + type;
+					document.getElementById("rr4Status").textContent = message;
+					setStatus("Ressource extraite : " + message, false);
+				} catch (error) {
+					document.getElementById("rr4Status").textContent = error.message;
+					setStatus(error.message, true);
 				}
 			}
 
@@ -624,8 +865,13 @@
 				var request = ++m_sourceRequest;
 				if (!path)
 					return setStatus("Indique un chemin de fichier.", true);
-				if (!(mode === "mdl" ? /\.MDL$/i : /\.RRM$/i).test(path))
-					return setStatus(mode === "mdl" ? "Gran Turismo accepte uniquement les fichiers .MDL." : "Ridge Racer 1 accepte uniquement les fichiers .RRM.", true);
+				var extension = mode === "mdl" ? /\.MDL$/i : mode === "rr4" ? /\.BIN$/i : /\.RRM$/i;
+				if (!extension.test(path)) {
+					var message = mode === "mdl" ? "Gran Turismo accepte uniquement les fichiers .MDL." :
+						mode === "rr4" ? "Ridge Racer Type 4 accepte uniquement l'archive R4.BIN." :
+						"Ridge Racer 1 accepte uniquement les fichiers .RRM.";
+					return setStatus(message, true);
+				}
 				m_modePaths[mode] = path;
 				setStatus("Chargement de " + path + "...", false);
 				try {
@@ -661,10 +907,13 @@
 				var mode = document.getElementById("sourceMode").value;
 				m_sourceRequest++;
 				m_textureRequest++;
+				if (m_sourceType === "rr4")
+					disposeRr4Meshes();
 				m_viewer.clearSky();
 				document.getElementById("skyStatus").textContent = "";
 				m_buffer = null;
 				m_mapSectors = null;
+				m_rr4Resources = null;
 				m_sourceType = "";
 				if (m_object)
 					m_viewer.remove(m_object);
@@ -678,12 +927,26 @@
 				m_mapTextures = [];
 				document.getElementById("sourcePath").value = m_modePaths[mode];
 				document.getElementById("objectId").value = 0;
-				document.getElementById("objectId").max = mode === "mdl" ? 127 : 257;
-				document.getElementById("sourceLegend").textContent = mode === "mdl" ? "Gran Turismo · Fichier MDL" : "Ridge Racer 1 · Fichier MAP.RRM";
+				document.getElementById("objectId").max = mode === "mdl" ? 127 : mode === "rr4" ? 933 : 257;
+				document.getElementById("sourceLegend").textContent = mode === "mdl" ? "Gran Turismo · Fichier MDL" :
+					mode === "rr4" ? "Ridge Racer Type 4 · Archive R4.BIN" :
+					"Ridge Racer 1 · Fichier MAP.RRM";
+				document.getElementById("objectLegend").textContent = mode === "rr4" ? "Circuit / ressource" : "Bloc / objet";
 				document.getElementById("loadCircuit").textContent = "Charger le circuit complet";
+				document.getElementById("loadObject").hidden = mode === "rr4";
+				document.getElementById("objectIdControls").hidden = mode === "rr4";
+				document.getElementById("loadCircuit").hidden = mode === "rr4";
+				document.getElementById("rr4CourseControls").hidden = mode !== "rr4";
+				document.getElementById("rr4RawControls").hidden = mode !== "rr4";
+				document.getElementById("rr4Status").hidden = mode !== "rr4";
 				document.getElementById("mapWarning").hidden = mode !== "map";
 				document.getElementById("buildingStatus").textContent = "";
+				document.getElementById("buildingStatus").hidden = mode !== "map";
 				document.getElementById("mapIndexControls").hidden = mode !== "map";
+				document.getElementById("cameraControls").hidden = false;
+				document.getElementById("renderControls").hidden = mode === "rr4";
+				document.getElementById("rr4RenderControls").hidden = mode !== "rr4";
+				document.getElementById("textureControls").hidden = true;
 				document.getElementById("localFile").value = "";
 				loadPath();
 			}
@@ -700,16 +963,19 @@
 					if (m_sourceType === "map") loadMapSelection(true);
 					else loadMdlObject();
 				});
+				document.getElementById("rr4Extract").addEventListener("click", extractRr4Resource);
+				document.getElementById("rr4LoadCourse").addEventListener("click", loadRr4Course);
 				document.getElementById("loadCircuit").addEventListener("click", function() {
 					if (m_sourceType === "map") loadMapSelection(false);
 					else loadMdlCircuit();
 				});
 				document.getElementById("topView").addEventListener("click", function() {
 					if (!m_object || !m_object.userData.minimum)
-						return setStatus("Charge un objet MDL avant de cadrer la vue.", true);
+						return setStatus("Charge un objet ou un circuit avant de cadrer la vue.", true);
 					m_viewer.fitTopDownToBounds(m_object.userData.minimum, m_object.userData.maximum);
 				});
 				document.getElementById("renderMode").addEventListener("change", applyRenderMode);
+				document.getElementById("rr4RenderMode").addEventListener("change", applyRr4RenderMode);
 				document.getElementById("tmsBank").addEventListener("change", function() {
 					if (document.getElementById("renderMode").value === "texture" || document.getElementById("renderMode").value === "textureSun")
 						applyRenderMode();
