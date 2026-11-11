@@ -36,7 +36,7 @@ Depuis la racine du projet, lancez un serveur HTTP, par exemple :
 python3 -m http.server 8000
 ```
 
-Ouvrez ensuite [http://localhost:8000/](http://localhost:8000/) dans un navigateur compatible WebGL. Le mode Ridge Racer 1 est sélectionné par défaut. L'interface permet de changer de mode, de choisir un bloc ou le circuit complet, de modifier le rendu et de passer en vue de dessus.
+Ouvrez ensuite [http://localhost:8000/](http://localhost:8000/) dans un navigateur compatible WebGL. Le mode Ridge Racer 1 est sélectionné par défaut. L'interface permet de changer de mode, de choisir un bloc ou le circuit complet, de modifier le rendu et de passer en vue de dessus. Double-cliquez sur une surface du circuit pour y centrer la caméra et son pivot de rotation, sans changer l'angle ni la distance de vue.
 
 ## Tests
 
@@ -46,4 +46,5 @@ Avec Node.js et les fichiers Ridge Racer 1 en place :
 node tests/map.test.js
 node tests/map-vram.test.js
 node tests/objects.test.js
+node tests/sceneview.test.js
 ```

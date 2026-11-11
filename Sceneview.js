@@ -11,8 +11,55 @@ var Sceneview = function(containerId, width, height){
 	this.activeCameraMode = 'fly';
 
 	window.addEventListener('resize', this.resize.bind(this), true);
+	this.renderer.domElement.addEventListener('dblclick', this.centerOnClick.bind(this));
 	this.clear();
 	this.animate();
+};
+
+Sceneview.prototype.centerOnClick = function(event) {
+	if (this.activeCameraMode === 'fly' && this.cameraSpline)
+		return;
+
+	var rect = this.renderer.domElement.getBoundingClientRect();
+	if (!rect.width || !rect.height)
+		return;
+	var pointer = new THREE.Vector2(
+		(event.clientX - rect.left) / rect.width * 2 - 1,
+		1 - (event.clientY - rect.top) / rect.height * 2
+	);
+	this.scene.updateMatrixWorld(true);
+	this.camera.updateMatrixWorld(true);
+
+	var meshes = [];
+	function collectMeshes(object) {
+		if (!object.visible)
+			return;
+		if (object instanceof THREE.Mesh)
+			meshes.push(object);
+		object.children.forEach(collectMeshes);
+	}
+	collectMeshes(this.scene);
+
+	var raycaster = new THREE.Raycaster();
+	raycaster.setFromCamera(pointer, this.camera);
+	var direction = this.camera.getWorldDirection();
+	var intersections = raycaster.intersectObjects(meshes, false);
+	for (var i = 0; i < intersections.length; i++) {
+		var intersection = intersections[i];
+		var material = intersection.object.material;
+		if (material instanceof THREE.MultiMaterial)
+			material = material.materials[intersection.face.materialIndex];
+		if (!material || !material.visible)
+			continue;
+		var depth = intersection.point.clone().sub(this.camera.position).dot(direction);
+		if (depth < this.camera.near || depth > this.camera.far)
+			continue;
+		var offset = intersection.point.clone().sub(this.controls.target);
+		this.camera.position.add(offset);
+		this.controls.target.copy(intersection.point);
+		this.controls.update();
+		return;
+	}
 };
 
 Sceneview.prototype.clear = function() 
