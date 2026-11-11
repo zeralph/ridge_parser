@@ -4,7 +4,7 @@ Ce projet expérimental permet d'explorer dans un navigateur des données de cir
 
 - **Ridge Racer 1** : affichage du circuit depuis `MAP.RRM`, placement des sections avec `IDX.HED`, textures TMS, décors issus de `OBJ.RRO` et ciel panoramique.
 - **Gran Turismo** : affichage du circuit `DESERT.MDL`, avec un mode de texture expérimental.
-- **Ridge Racer Type 4** : aperçu des huit circuits avec ruban routier reconstruit. Les modes wireframe, shaded et texturé (asphalte procédural expérimental) sont disponibles, ainsi que l'extraction individuelle des ressources.
+- **Ridge Racer Type 4** : aperçu des huit circuits avec décors fixes, ciel, textures et couleurs natives. Les modes wireframe, shaded et texturé sont disponibles, ainsi que l'extraction individuelle des ressources.
 
 Le placement, les textures et le ciel sont des reconstitutions en cours d'étude et ne reproduisent pas nécessairement le rendu des jeux. Consultez [data.md](data.md) pour les détails techniques et les limites connues.
 
@@ -30,7 +30,7 @@ ridge_racer_4/
 Le circuit Ridge Racer 1 nécessite `MAP.RRM` et `IDX.HED`. Les banques TMS servent aux textures et au ciel ; `OBJ.RRO` et `SCUS-943.00` servent aux décors du circuit complet. Pour les placements, seule la version de `SCUS-943.00` reconnue par le viewer est prise en charge. Le mode Gran Turismo utilise aussi les banques TMS de `ridge_racer/` pour son affichage texturé expérimental.
 
 Les fichiers MAP, IDX et MDL peuvent également être sélectionnés depuis l'interface ; les textures et les décors sont recherchés dans `ridge_racer/`.
-Le mode Ridge Racer Type 4 lit l'index de secteurs de `R4.BIN` et reconstruit un ruban routier approximatif pour chacun des huit circuits. Les ressources d'objets de piste ne sont pas encore rendues : elles mélangent plusieurs chemins de soumission, dont des objets animés, et leur table de modèles référence une banque RRO qui n'est pas encore décodée. Le mode texturé ajoute seulement un asphalte procédural expérimental à la route. L'interface permet aussi de télécharger individuellement les ressources sous leur nom extrait (`R4.BIN.00000`, etc.). Les fichiers déjà extraits ne sont pas nécessaires.
+Le mode Ridge Racer Type 4 lit l'index de secteurs de `R4.BIN` et affiche les principaux flux de géométrie fixe de chacun des huit circuits, avec un ruban routier approximatif. Le ciel utilise les couches de géométrie colorée et texturée du circuit, avec un rendu expérimental. Le mode shaded affiche les couleurs des primitives sans éclairage ; le ruban approximatif reste de couleur uniforme. Le mode texturé reconstruit les textures TIM, les module par les couleurs des primitives et masque le ruban approximatif pour laisser apparaître la chaussée originale. Il ajoute par défaut aux couleurs du décor la première couleur ambiante du circuit : le panneau permet de la modifier ou de désactiver cet effet approximatif. Le ciel et les autres modes ne sont pas affectés. La visibilité, le brouillard et la semi-transparence originales ne sont pas encore émulés ; certaines surfaces peuvent se superposer. Les objets de piste, dont certains sont animés, ne sont pas encore rendus. L'interface permet aussi de télécharger individuellement les ressources sous leur nom extrait (`R4.BIN.00000`, etc.). Les fichiers déjà extraits ne sont pas nécessaires.
 
 ## Lancement
 
@@ -40,7 +40,7 @@ Depuis la racine du projet, lancez un serveur HTTP, par exemple :
 python3 -m http.server 8000
 ```
 
-Ouvrez ensuite [http://localhost:8000/](http://localhost:8000/) dans un navigateur compatible WebGL. Le mode Ridge Racer 1 est sélectionné par défaut. L'interface permet de changer de mode, de choisir un bloc ou le circuit complet, de modifier le rendu et de passer en vue de dessus. En mode Ridge Racer Type 4, chargez `R4.BIN`, choisissez l'un des huit circuits puis cliquez sur « Afficher le circuit ». Double-cliquez sur une surface affichée pour y centrer la caméra et son pivot de rotation, sans changer l'angle ni la distance de vue.
+Ouvrez ensuite [http://localhost:8000/](http://localhost:8000/) dans un navigateur compatible WebGL. Ridge Racer Type 4 démarre par défaut avec le premier circuit en mode texturé. L'interface permet de changer de mode, de choisir un bloc ou le circuit complet, de modifier le rendu et de passer en vue de dessus. Pour changer de circuit R4, choisissez l'un des huit circuits puis cliquez sur « Afficher le circuit ». Double-cliquez sur une surface affichée pour y centrer la caméra et son pivot de rotation, sans changer l'angle ni la distance de vue.
 
 ## Tests
 

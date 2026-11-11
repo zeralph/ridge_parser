@@ -111,4 +111,19 @@ front.material.materials[0].side = THREE.FrontSide;
 click(350, 150);
 assert.ok(viewer.controls.target.equals(new THREE.Vector3()), "Une face arrière non affichée doit être ignorée");
 
+const skyGeometry = new THREE.PlaneGeometry(1, 1);
+const skyTexture = new THREE.Texture();
+const skyMaterial = new THREE.MeshBasicMaterial({ map: skyTexture });
+const skyScene = new THREE.Scene();
+skyScene.add(new THREE.Mesh(skyGeometry, skyMaterial));
+skyScene.add(new THREE.Mesh(skyGeometry, skyMaterial));
+const disposed = { geometry: 0, texture: 0, material: 0 };
+skyGeometry.addEventListener("dispose", () => disposed.geometry++);
+skyTexture.addEventListener("dispose", () => disposed.texture++);
+skyMaterial.addEventListener("dispose", () => disposed.material++);
+viewer.setSkyScene(skyScene);
+viewer.clearSky();
+assert.deepEqual(disposed, { geometry: 1, texture: 1, material: 1 });
+assert.equal(viewer.skyScene, null);
+
 console.log("Recentrage de la caméra vérifié.");

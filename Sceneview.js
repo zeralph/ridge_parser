@@ -153,7 +153,6 @@ Sceneview.prototype.renderScene = function(camera) {
 };
 
 Sceneview.prototype.setSky = function(pixels) {
-	this.clearSky();
 	var texture = new THREE.DataTexture(pixels, 512, 256, THREE.RGBAFormat, THREE.UnsignedByteType);
 	texture.magFilter = THREE.LinearFilter;
 	texture.minFilter = THREE.LinearFilter;
@@ -165,25 +164,37 @@ Sceneview.prototype.setSky = function(pixels) {
 		face.forEach(function(uv) { uv.y = 1 - uv.y; });
 	});
 	var material = new THREE.MeshBasicMaterial({ map: texture, side: THREE.BackSide, depthWrite: false });
-	this.skyScene = new THREE.Scene();
-	this.skyScene.add(new THREE.Mesh(geometry, material));
+	var scene = new THREE.Scene();
+	scene.add(new THREE.Mesh(geometry, material));
+	this.setSkyScene(scene);
+};
+
+Sceneview.prototype.setSkyScene = function(scene) {
+	this.clearSky();
+	this.skyScene = scene;
 	this.skyCamera = new THREE.PerspectiveCamera(90, 1, 0.1, 100);
-	this.skyTexture = texture;
-	this.skyGeometry = geometry;
-	this.skyMaterial = material;
 };
 
 Sceneview.prototype.clearSky = function() {
 	if (!this.skyScene)
 		return;
-	this.skyTexture.dispose();
-	this.skyGeometry.dispose();
-	this.skyMaterial.dispose();
+	var geometries = new Set(), materials = new Set(), textures = new Set();
+	this.skyScene.traverse(function(object) {
+		if (!(object instanceof THREE.Mesh))
+			return;
+		geometries.add(object.geometry);
+		var meshMaterials = object.material instanceof THREE.MultiMaterial ? object.material.materials : [object.material];
+		meshMaterials.forEach(function(material) {
+			materials.add(material);
+			if (material.map)
+				textures.add(material.map);
+		});
+	});
+	geometries.forEach(function(geometry) { geometry.dispose(); });
+	materials.forEach(function(material) { material.dispose(); });
+	textures.forEach(function(texture) { texture.dispose(); });
 	this.skyScene = null;
 	this.skyCamera = null;
-	this.skyTexture = null;
-	this.skyGeometry = null;
-	this.skyMaterial = null;
 };
 
 Sceneview.prototype.remove = function(object) {

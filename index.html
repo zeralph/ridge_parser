@@ -6,11 +6,11 @@
 		<title>Ridge Racer | Viewer de circuit</title>
 		<script src="js/three.js?v=raycast-material"></script>
 		<script src="js/orbit-controls.js"></script>
-		<script src="Sceneview.js?v=double-click-center"></script>
+		<script src="Sceneview.js?v=rr4-sky"></script>
 		<script src="MapDecode.js"></script>
 		<script src="ObjDecode.js"></script>
-		<script src="Rr4Decode.js"></script>
-		<script src="MapVram.js"></script>
+		<script src="Rr4Decode.js?v=rr4-ambient"></script>
+		<script src="MapVram.js?v=rr4-textures"></script>
 		<script src="MapView.js"></script>
 		<style>
 			:root {
@@ -33,6 +33,8 @@
 			input, select, button { width: 100%; min-height: 36px; border: 1px solid #405557; border-radius: 4px; background: #10191b; color: #e4efed; font: inherit; }
 			input, select { padding: 7px 9px; }
 			input[type="file"] { min-height: auto; padding: 7px; font-size: 11px; }
+			label.checkbox { display: flex; align-items: center; gap: 8px; }
+			label.checkbox input { width: auto; min-height: auto; }
 			button { cursor: pointer; border-color: #54bca8; background: #1d7568; font-weight: 650; }
 			button:hover { background: #258d7d; }
 			#status { min-height: 42px; margin: 16px 0 0; color: #9aafab; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; white-space: pre-line; }
@@ -55,8 +57,8 @@
 					<label for="sourceMode">Format</label>
 					<select id="sourceMode">
 						<option value="mdl">Gran Turismo · DESERT.MDL</option>
-						<option value="map" selected>Ridge Racer 1 · MAP.RRM</option>
-						<option value="rr4">Ridge Racer Type 4 · R4.BIN</option>
+						<option value="map">Ridge Racer 1 · MAP.RRM</option>
+						<option value="rr4" selected>Ridge Racer Type 4 · R4.BIN</option>
 					</select>
 				</fieldset>
 				<fieldset>
@@ -129,9 +131,13 @@
 					<label for="rr4RenderMode">Mode</label>
 					<select id="rr4RenderMode">
 						<option value="wireframe">Wireframe</option>
-						<option value="shaded" selected>Shaded</option>
-						<option value="textured">Textured · expérimental</option>
+						<option value="shaded">Shaded</option>
+						<option value="textured" selected>Textured · expérimental</option>
 					</select>
+					<label for="rr4Ambient">Ambiante du circuit (RGB)</label>
+					<input id="rr4Ambient" type="color" value="#000000">
+					<p id="rr4AmbientSource">Charge un circuit pour lire sa couleur ambiante.</p>
+					<label class="checkbox"><input id="rr4AmbientEnabled" type="checkbox" checked> Appliquer au décor texturé (approximation)</label>
 					<p id="rr4RenderStatus" role="status"></p>
 				</fieldset>
 				<fieldset id="textureControls" hidden>
@@ -174,6 +180,7 @@
 			var m_sourceType = "";
 			var m_mapSectors = null;
 			var m_rr4Resources = null;
+			var m_rr4Textures = [];
 			var m_textureRequest = 0;
 			var m_mapTextures = [];
 			var m_sourceRequest = 0;
@@ -673,6 +680,81 @@
 				}
 			}
 
+			function loadRr4Sky(layers, textureBuffer) {
+				m_viewer.clearSky();
+				var skyStatus = document.getElementById("skyStatus");
+				try {
+					var vram = MapVram.loadRr4(textureBuffer);
+					var pages = new Map();
+					layers.forEach(function(layer) {
+						layer.primitives.forEach(function(primitive) {
+							if (!primitive.uvs.length)
+								return;
+							var key = rr4TextureKey(primitive);
+							if (!pages.has(key))
+								pages.set(key, MapVram.page(vram, primitive.tpage, primitive.clut));
+							if (!MapVram.covered(pages.get(key), primitive.uvs))
+								throw new Error("Texture du ciel R4 incomplète : " + key + ".");
+						});
+					});
+					var scene = new THREE.Scene();
+					layers.forEach(function(layer, layerIndex) {
+						var groups = new Map();
+						layer.primitives.forEach(function(primitive) {
+							var textured = primitive.uvs.length > 0;
+							var key = textured ? rr4TextureKey(primitive) : "color";
+							if (!groups.has(key))
+								groups.set(key, { geometry: new THREE.Geometry(), textured: textured });
+							var geometry = groups.get(key).geometry;
+							var base = geometry.vertices.length;
+							primitive.indices.forEach(function(index) {
+								var vertex = layer.vertices[index];
+								var coordinates = Rr4Decode.worldVertex(vertex[0], vertex[1], vertex[2]);
+								geometry.vertices.push(new THREE.Vector3(coordinates[0] / 256, coordinates[1] / 256, coordinates[2] / 256));
+							});
+							var triangles = primitive.indices.length === 4 ? [[0, 1, 2], [1, 3, 2]] : [[0, 1, 2]];
+							triangles.forEach(function(indices) {
+								var face = new THREE.Face3(base + indices[0], base + indices[1], base + indices[2]);
+								face.vertexColors = indices.map(function(index) {
+									var color = primitive.colors[index], divisor = textured ? 128 : 255;
+									return new THREE.Color(color[0] / divisor, color[1] / divisor, color[2] / divisor);
+								});
+								geometry.faces.push(face);
+								if (textured)
+									geometry.faceVertexUvs[0].push(indices.map(function(index) {
+										var uv = primitive.uvs[index];
+										return new THREE.Vector2((uv[0] + 0.5) / 256, (uv[1] + 0.5) / 256);
+									}));
+							});
+						});
+						groups.forEach(function(group, key) {
+							var options = { side: THREE.DoubleSide, vertexColors: THREE.VertexColors, depthTest: false, depthWrite: false };
+							if (group.textured) {
+								var texture = new THREE.DataTexture(pages.get(key).pixels, 256, 256, THREE.RGBAFormat, THREE.UnsignedByteType);
+								texture.magFilter = THREE.NearestFilter;
+								texture.minFilter = THREE.NearestFilter;
+								texture.generateMipmaps = false;
+								texture.flipY = false;
+								texture.needsUpdate = true;
+								options.map = texture;
+								options.alphaTest = 0.5;
+							}
+							var mesh = new THREE.Mesh(group.geometry, new THREE.MeshBasicMaterial(options));
+							mesh.renderOrder = layerIndex * 2 + (group.textured ? 1 : 0);
+							scene.add(mesh);
+						});
+					});
+					m_viewer.setSkyScene(scene);
+					skyStatus.textContent = "Ciel R4 · géométrie et textures du circuit · rendu expérimental";
+				} catch (error) {
+					skyStatus.textContent = "Ciel R4 non chargé : " + error.message;
+				}
+			}
+
+			function rr4TextureKey(primitive) {
+				return primitive.tpage + ":" + primitive.clut + ":" + (primitive.window || []).join(",");
+			}
+
 			function renderRr4Course(courseId) {
 				var courseData = Rr4Decode.parseCourse(Rr4Decode.extract(m_buffer, m_rr4Resources, courseId * 2 + 1));
 				var routeData = Rr4Decode.parseTrackResource(Rr4Decode.extract(m_buffer, m_rr4Resources, Rr4Decode.trackResourceBase + courseId));
@@ -680,15 +762,15 @@
 				if (routeData.sampleCount !== samples.length)
 					throw new Error("Le nombre d'échantillons du circuit ne correspond pas à sa ressource de tracé.");
 				var geometry = new THREE.Geometry();
-				var routePositionScale = 4; // Route centers are quarter-scale versus object-node coordinates.
 				var minimum = new THREE.Vector3(Infinity, Infinity, Infinity);
 				var maximum = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
 				function addVertex(sample, edge) {
-					var point = new THREE.Vector3(
-						sample.x * routePositionScale + edge[0],
+					var coordinates = Rr4Decode.worldVertex(
+						sample.x + edge[0],
 						sample.height,
-						sample.z * routePositionScale + edge[1]
+						sample.z + edge[1]
 					);
+					var point = new THREE.Vector3(coordinates[0], coordinates[1], coordinates[2]);
 					geometry.vertices.push(point);
 					minimum.min(point);
 					maximum.max(point);
@@ -699,7 +781,7 @@
 					var next = samples[(index + 1) % samples.length];
 					var base = geometry.vertices.length;
 					var currentV = textureDistance / 512;
-					textureDistance += Math.max(0, current.segmentLength) * routePositionScale;
+					textureDistance += Math.max(0, current.segmentLength);
 					var nextV = textureDistance / 512;
 					addVertex(current, current.right);
 					addVertex(current, current.left);
@@ -728,93 +810,176 @@
 				mesh.userData.rr4Road = true;
 				var group = new THREE.Object3D();
 				group.add(mesh);
+				var decorGeometry = new THREE.Geometry();
+				courseData.decorations.sort(function(a, b) {
+					var first = rr4TextureKey(a), second = rr4TextureKey(b);
+					return first < second ? -1 : first > second ? 1 : 0;
+				});
+				courseData.decorations.forEach(function(quad) {
+					var base = decorGeometry.vertices.length;
+					quad.vertices.forEach(function(vertex) {
+						var coordinates = Rr4Decode.worldVertex(vertex[0], vertex[1], vertex[2]);
+						var point = new THREE.Vector3(coordinates[0], coordinates[1], coordinates[2]);
+						decorGeometry.vertices.push(point);
+						minimum.min(point);
+						maximum.max(point);
+					});
+					decorGeometry.faces.push(new THREE.Face3(base, base + 1, base + 2));
+					decorGeometry.faces.push(new THREE.Face3(base + 1, base + 3, base + 2));
+					[[0, 1, 2], [1, 3, 2]].forEach(function(indices, faceIndex) {
+						decorGeometry.faceVertexUvs[0].push(indices.map(function(index) {
+							var uv = quad.uvs[index];
+							return new THREE.Vector2((uv[0] + 0.5) / 256, (uv[1] + 0.5) / 256);
+						}));
+						decorGeometry.faces[decorGeometry.faces.length - 2 + faceIndex].vertexColors = indices.map(function(index) {
+							var color = quad.colors[index];
+							return new THREE.Color(color[0] / 128, color[1] / 128, color[2] / 128);
+						});
+					});
+				});
+				decorGeometry.computeFaceNormals();
+				decorGeometry.computeVertexNormals();
+				decorGeometry.computeBoundingSphere();
+				var decorMesh = new THREE.Mesh(decorGeometry, new THREE.MeshBasicMaterial({
+					color: 0xffffff,
+					side: THREE.DoubleSide
+				}));
+				decorMesh.userData.rr4Primitives = courseData.decorations;
+				group.add(decorMesh);
+				group.userData.rr4TextureBuffer = Rr4Decode.extract(m_buffer, m_rr4Resources, courseId * 2);
+				group.userData.rr4Ambient = courseData.ambient;
 				group.userData.minimum = minimum.clone();
 				group.userData.maximum = maximum.clone();
 				group.userData.summary = "Ridge Racer Type 4 · Circuit " + (courseId + 1) +
-					" · " + samples.length + " échantillons · ruban routier uniquement";
+					" · " + samples.length + " échantillons · " + courseData.decorations.length + " quads de géométrie fixe";
 				if (m_sourceType === "rr4")
 					disposeRr4Meshes();
 				if (m_object)
 					m_viewer.remove(m_object);
 				m_object = group;
-				m_triangleObjects = [mesh];
+				m_triangleObjects = [mesh, decorMesh];
 				m_viewer.scene.add(group);
 				m_viewer.fitToBounds(minimum, maximum);
-				applyRr4RenderMode();
 				document.getElementById("rr4Status").textContent = group.userData.summary +
-					" · décor non extrait : le fichier d'objets regroupe plusieurs types, dont des objets animés.";
-				setStatus(group.userData.summary, false);
-			}
-
-			function createRr4RoadTexture() {
-				var width = 64;
-				var height = 128;
-				var pixels = new Uint8Array(width * height * 4);
-				for (var y = 0; y < height; y++) {
-					for (var x = 0; x < width; x++) {
-						var edge = x < 4 || x >= width - 4;
-						var curbStripe = edge && (Math.floor(y / 8) % 2 === 0);
-						var centerMarking = x >= 30 && x < 34 && y % 32 < 12;
-						var noise = ((x * 17 + y * 31 + (x * y) % 23) % 17) - 8;
-						var shade = centerMarking ? 184 + noise : curbStripe ? 157 + noise : 67 + noise;
-						var pixel = (y * width + x) * 4;
-						pixels[pixel] = curbStripe ? (Math.floor(y / 8) % 2 === 0 ? shade : 100 + noise) : shade;
-						pixels[pixel + 1] = curbStripe ? (Math.floor(y / 8) % 2 === 0 ? shade : 48 + noise) : shade;
-						pixels[pixel + 2] = curbStripe ? (Math.floor(y / 8) % 2 === 0 ? shade : 43 + noise) : shade;
-						pixels[pixel + 3] = 255;
-					}
-				}
-				var texture = new THREE.DataTexture(pixels, width, height, THREE.RGBAFormat, THREE.UnsignedByteType);
-				texture.wrapS = THREE.RepeatWrapping;
-				texture.wrapT = THREE.RepeatWrapping;
-				texture.magFilter = THREE.LinearFilter;
-				texture.minFilter = THREE.LinearFilter;
-				texture.generateMipmaps = false;
-				texture.flipY = false;
-				texture.needsUpdate = true;
-				return texture;
+					" · visibilité originale non décodée ; objets animés exclus.";
+				document.getElementById("rr4Ambient").value = "#" + courseData.ambient.map(function(channel) {
+					return channel.toString(16).padStart(2, "0");
+				}).join("");
+				document.getElementById("rr4AmbientSource").textContent = "Valeur native : RGB(" + courseData.ambient.join(", ") + ") · première entrée";
+				applyRr4RenderMode();
+				loadRr4Sky(courseData.sky, group.userData.rr4TextureBuffer);
 			}
 
 			function disposeRr4Meshes() {
+				m_rr4Textures.forEach(function(texture) { texture.dispose(); });
+				m_rr4Textures = [];
 				m_triangleObjects.forEach(function(mesh) {
-					if (mesh.userData.rr4Texture)
-						mesh.userData.rr4Texture.dispose();
 					disposeMeshMaterial(mesh.material);
 				});
+			}
+
+			function updateRr4Ambient() {
+				var decor = m_triangleObjects.find(function(mesh) { return mesh.userData.rr4Primitives; });
+				if (!decor || !m_object || !m_object.userData.rr4Ambient)
+					return;
+				var enabled = document.getElementById("rr4RenderMode").value === "textured" &&
+					document.getElementById("rr4AmbientEnabled").checked;
+				var value = document.getElementById("rr4Ambient").value;
+				var ambient = enabled ? [1, 3, 5].map(function(offset) {
+					return parseInt(value.slice(offset, offset + 2), 16);
+				}) : [0, 0, 0];
+				decor.userData.rr4Primitives.forEach(function(primitive, index) {
+					[[0, 1, 2], [1, 3, 2]].forEach(function(indices, triangle) {
+						var face = decor.geometry.faces[index * 2 + triangle];
+						indices.forEach(function(vertex, corner) {
+							var source = primitive.colors[vertex];
+							face.vertexColors[corner].setRGB(
+								Math.min(255, source[0] + ambient[0]) / 128,
+								Math.min(255, source[1] + ambient[1]) / 128,
+								Math.min(255, source[2] + ambient[2]) / 128
+							);
+						});
+					});
+				});
+				decor.geometry.colorsNeedUpdate = true;
 			}
 
 			function applyRr4RenderMode() {
 				var mode = document.getElementById("rr4RenderMode").value;
-				var texture = mode === "textured" ? createRr4RoadTexture() : null;
+				var createdTextures = [];
+				var textured = null;
+				var description = mode === "wireframe" ? "Wireframe" : "Shaded · couleurs des primitives sans éclairage";
+				if (mode === "textured") {
+					try {
+						if (!m_object || !m_object.userData.rr4TextureBuffer)
+							throw new Error("Charge d'abord un circuit R4.");
+						var vram = MapVram.loadRr4(m_object.userData.rr4TextureBuffer);
+						var decor = m_triangleObjects.find(function(mesh) { return mesh.userData.rr4Primitives; });
+						var cache = new Map();
+						var materials = [];
+						var faceMaterials = [];
+						var matched = 0, missing = 0;
+						decor.userData.rr4Primitives.forEach(function(primitive) {
+							var key = rr4TextureKey(primitive);
+							if (!cache.has(key)) {
+								var page = MapVram.page(vram, primitive.tpage, primitive.clut, primitive.window);
+								var texture = new THREE.DataTexture(page.pixels, 256, 256, THREE.RGBAFormat, THREE.UnsignedByteType);
+								texture.magFilter = THREE.NearestFilter;
+								texture.minFilter = THREE.NearestFilter;
+								texture.generateMipmaps = false;
+								texture.flipY = false;
+								texture.needsUpdate = true;
+								createdTextures.push(texture);
+								cache.set(key, { page: page, index: materials.length });
+								materials.push(new THREE.MeshBasicMaterial({
+									map: texture, side: THREE.DoubleSide, alphaTest: 0.5,
+									vertexColors: THREE.VertexColors
+								}));
+							}
+							var entry = cache.get(key);
+							if (MapVram.covered(entry.page, primitive.uvs))
+								matched++;
+							else
+								missing++;
+							faceMaterials.push(entry.index, entry.index);
+						});
+						textured = { mesh: decor, materials: materials, faceMaterials: faceMaterials };
+						description = "Textures TIM et couleurs R4 · " + matched + " quads couverts · " + missing +
+							" incomplets (magenta) · visibilité et transparence STP non émulées";
+					} catch (error) {
+						createdTextures.forEach(function(texture) { texture.dispose(); });
+						if (materials)
+							materials.forEach(function(material) { material.dispose(); });
+						document.getElementById("rr4RenderStatus").textContent = error.message;
+						setStatus(error.message, true);
+						return;
+					}
+				}
+				m_rr4Textures.forEach(function(texture) { texture.dispose(); });
+				m_rr4Textures = createdTextures;
 				m_triangleObjects.forEach(function(mesh) {
-					if (mesh.userData.rr4Texture)
-						mesh.userData.rr4Texture.dispose();
-					mesh.userData.rr4Texture = null;
 					disposeMeshMaterial(mesh.material);
+					mesh.visible = !(mode === "textured" && mesh.userData.rr4Road);
 					if (mode === "wireframe") {
 						mesh.material = new THREE.MeshBasicMaterial({
 							color: 0xd8e5e3, wireframe: true, side: THREE.DoubleSide
 						});
+					} else if (textured && mesh === textured.mesh) {
+						mesh.geometry.faces.forEach(function(face, index) {
+							face.materialIndex = textured.faceMaterials[index];
+						});
+						mesh.geometry.uvsNeedUpdate = true;
+						mesh.geometry.groupsNeedUpdate = true;
+						mesh.geometry.__directGeometry = undefined;
+						mesh.material = new THREE.MultiMaterial(textured.materials);
 					} else {
-						var options = {
-							color: mesh.userData.rr4Road ? 0xc8ccce : 0xffffff,
-							side: THREE.DoubleSide
-						};
-						if (mesh.userData.rr4VertexColors)
-							options.vertexColors = THREE.VertexColors;
-						if (mode === "textured" && mesh.userData.rr4Road) {
-							mesh.geometry.uvsNeedUpdate = true;
-							mesh.geometry.__directGeometry = undefined;
-							options.color = 0xffffff;
-							options.map = texture;
-							mesh.userData.rr4Texture = texture;
-						}
-						mesh.material = new THREE.MeshLambertMaterial(options);
+						mesh.material = mesh.userData.rr4Road ?
+							new THREE.MeshBasicMaterial({ color: 0xc8ccce, side: THREE.DoubleSide }) :
+							// Vertex colors are scaled by 1/128 for PS1 texture modulation.
+							new THREE.MeshBasicMaterial({ color: 0x808080, vertexColors: THREE.VertexColors, side: THREE.DoubleSide });
 					}
 				});
-				var description = mode === "wireframe" ? "Wireframe" :
-					mode === "shaded" ? "Shaded · couleurs de primitives décodées" :
-					"Textured · route procédurale, décors sans textures originales";
+				updateRr4Ambient();
 				document.getElementById("rr4RenderStatus").textContent = description;
 				if (m_object && m_object.userData.summary)
 					setStatus(m_object.userData.summary + " · " + description, false);
@@ -946,6 +1111,8 @@
 				document.getElementById("cameraControls").hidden = false;
 				document.getElementById("renderControls").hidden = mode === "rr4";
 				document.getElementById("rr4RenderControls").hidden = mode !== "rr4";
+				document.getElementById("rr4Ambient").value = "#000000";
+				document.getElementById("rr4AmbientSource").textContent = "Charge un circuit pour lire sa couleur ambiante.";
 				document.getElementById("textureControls").hidden = true;
 				document.getElementById("localFile").value = "";
 				loadPath();
@@ -976,6 +1143,8 @@
 				});
 				document.getElementById("renderMode").addEventListener("change", applyRenderMode);
 				document.getElementById("rr4RenderMode").addEventListener("change", applyRr4RenderMode);
+				document.getElementById("rr4Ambient").addEventListener("input", updateRr4Ambient);
+				document.getElementById("rr4AmbientEnabled").addEventListener("change", updateRr4Ambient);
 				document.getElementById("tmsBank").addEventListener("change", function() {
 					if (document.getElementById("renderMode").value === "texture" || document.getElementById("renderMode").value === "textureSun")
 						applyRenderMode();
@@ -1000,7 +1169,7 @@
 				window.addEventListener("resize", function() {
 					m_viewer.resize();
 				});
-				loadPath();
+				changeSourceMode();
 			}
 
 			start();

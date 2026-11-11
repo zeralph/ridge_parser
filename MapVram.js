@@ -8,6 +8,35 @@ var MapVram = {
 		return { words: new Uint16Array(1024 * 512), written: new Uint8Array(1024 * 512) };
 	},
 
+	loadRr4: function(buffer) {
+		var data = new DataView(buffer);
+		if (data.byteLength < 12 || data.getUint32(0, true) !== 2)
+			throw new Error("En-tête de textures R4 invalide.");
+		var offsets = [data.getUint32(4, true), data.getUint32(8, true), data.byteLength];
+		if (offsets[0] < 12 || offsets[0] >= offsets[1] || offsets[1] >= offsets[2])
+			throw new Error("Répertoire de textures R4 invalide.");
+		var vram = this.create();
+		for (var list = 0; list < 2; list++) {
+			var position = offsets[list] + 4;
+			var end = offsets[list + 1];
+			var terminated = false;
+			while (position + 4 <= end) {
+				var size = data.getInt32(position, true);
+				if (size === 0) {
+					terminated = true;
+					break;
+				}
+				if (size < 0 || (size & ~3) < 8 || position + 4 + (size & ~3) > end)
+					throw new Error("Liste TIM R4 invalide ou tronquée.");
+				position += 4 + (size & ~3);
+			}
+			if (!terminated)
+				throw new Error("Liste TIM R4 sans terminateur.");
+			this.loadTms(vram, buffer.slice(offsets[list], end), "Textures R4");
+		}
+		return vram;
+	},
+
 	loadTms: function(vram, buffer, name) {
 		var data = new DataView(buffer);
 		var position = 4;
