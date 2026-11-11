@@ -1,0 +1,742 @@
+<!doctype html>
+<html lang="fr">
+	<head>
+		<meta charset="UTF-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1">
+		<title>Ridge Racer | Viewer de circuit</title>
+		<script src="js/three.js"></script>
+		<script src="js/orbit-controls.js"></script>
+		<script src="Sceneview.js"></script>
+		<script src="MapDecode.js"></script>
+		<script src="ObjDecode.js"></script>
+		<script src="MapVram.js"></script>
+		<script src="MapView.js"></script>
+		<style>
+			:root {
+				color-scheme: dark;
+				font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+				background: #10191b;
+				color: #e4efed;
+			}
+			* { box-sizing: border-box; }
+			[hidden] { display: none !important; }
+			body { margin: 0; min-height: 100vh; }
+			main { display: grid; grid-template-columns: 290px minmax(0, 1fr); height: 100vh; min-height: 0; overflow: hidden; }
+			aside { overflow-y: auto; padding: 22px; background: #182527; border-right: 1px solid #304244; }
+			h1 { margin: 0 0 22px; font-size: 19px; line-height: 1.25; }
+			fieldset { display: grid; gap: 12px; margin: 0 0 18px; padding: 0; border: 0; }
+			legend { margin-bottom: 12px; color: #8edbc9; font-size: 12px; font-weight: 700; text-transform: uppercase; }
+			label { display: grid; gap: 5px; color: #b7c8c5; font-size: 12px; }
+			input, select, button { width: 100%; min-height: 36px; border: 1px solid #405557; border-radius: 4px; background: #10191b; color: #e4efed; font: inherit; }
+			input, select { padding: 7px 9px; }
+			input[type="file"] { min-height: auto; padding: 7px; font-size: 11px; }
+			button { cursor: pointer; border-color: #54bca8; background: #1d7568; font-weight: 650; }
+			button:hover { background: #258d7d; }
+			#status { min-height: 42px; margin: 16px 0 0; color: #9aafab; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; white-space: pre-line; }
+			#status[data-error="true"] { color: #ff9a86; }
+			#container { min-width: 0; min-height: 0; height: 100%; background: #0a1012; }
+			#container canvas { display: block; }
+			@media (max-width: 700px) {
+				main { grid-template-columns: 1fr; height: auto; min-height: 100vh; overflow: visible; }
+				aside { border-right: 0; border-bottom: 1px solid #304244; }
+				#container { height: 60vh; min-height: 60vh; }
+			}
+		</style>
+	</head>
+	<body>
+		<main>
+			<aside>
+				<h1>Ridge Racer<br>Viewer de circuit</h1>
+				<fieldset>
+					<legend>Mode de chargement</legend>
+					<label for="sourceMode">Format</label>
+					<select id="sourceMode">
+						<option value="mdl">Gran Turismo · DESERT.MDL</option>
+						<option value="map" selected>Ridge Racer 1 · MAP.RRM</option>
+					</select>
+				</fieldset>
+				<fieldset>
+					<legend id="sourceLegend">Ridge Racer 1 · Fichier MAP.RRM</legend>
+					<label for="sourcePath">Chemin local</label>
+					<input id="sourcePath" type="text" value="ridge_racer/MAP.RRM" spellcheck="false">
+					<button id="loadPath" type="button">Charger</button>
+					<label for="localFile">Fichier depuis le disque</label>
+					<input id="localFile" type="file">
+				</fieldset>
+				<fieldset id="mapIndexControls">
+					<legend>Placement MAP</legend>
+					<label for="indexPath">Chemin IDX.HED</label>
+					<input id="indexPath" type="text" value="ridge_racer/IDX.HED" spellcheck="false">
+					<label for="indexFile">Ou fichier IDX.HED depuis le disque</label>
+					<input id="indexFile" type="file">
+				</fieldset>
+				<fieldset>
+					<legend>Bloc / objet</legend>
+					<label for="objectId">Indice</label>
+					<input id="objectId" type="number" min="0" max="257" step="1" value="0">
+					<button id="loadObject" type="button">Charger le bloc / objet</button>
+					<button id="loadCircuit" type="button">Charger le circuit complet</button>
+					<p id="mapWarning">Placement des sections depuis IDX.HED. Certaines surfaces et variantes du circuit peuvent se superposer.</p>
+					<p id="buildingStatus" role="status"></p>
+				</fieldset>
+				<fieldset>
+					<legend>Caméra</legend>
+					<button id="topView" type="button">Vue de dessus</button>
+					<p id="skyStatus" role="status"></p>
+				</fieldset>
+				<fieldset>
+					<legend>Rendu</legend>
+					<label for="renderMode">Mode</label>
+					<select id="renderMode">
+						<option value="wireframe">Wireframe</option>
+						<option value="blocks">Couleur par bloc</option>
+						<option value="sun">Shadé · soleil</option>
+						<option value="vertex">Vertex color · calculé</option>
+						<option value="texture">Texture TMS · expérimental</option>
+						<option value="textureSun" selected>Texture TMS · soleil</option>
+					</select>
+				</fieldset>
+				<fieldset id="textureControls" hidden>
+					<legend>Texture</legend>
+					<div id="mdlTextureControls">
+					<label for="tmsBank">Banque (MDL)</label>
+					<select id="tmsBank">
+						<option value="TEX0.TMS" selected>TEX0.TMS</option>
+						<option value="TEX1.TMS">TEX1.TMS</option>
+						<option value="TEX2.TMS">TEX2.TMS</option>
+						<option value="TEX3.TMS">TEX3.TMS</option>
+						<option value="TEX4.TMS">TEX4.TMS</option>
+					</select>
+					<label for="tmsImage">Bloc image</label>
+					<input id="tmsImage" type="number" min="0" step="1" value="24">
+					</div>
+					<div id="mdlPlaneControls">
+					<label for="tmsPlane">Page 4-bpp</label>
+					<select id="tmsPlane">
+						<option value="0" selected>Page 0</option>
+						<option value="1">Page 1</option>
+					</select>
+					</div>
+					<p id="textureStatus" role="status"></p>
+				</fieldset>
+				<p id="status" role="status" aria-live="polite">Chargement de MAP.RRM et IDX.HED...</p>
+			</aside>
+			<div id="container"></div>
+		</main>
+		<script>
+			var m_viewer;
+			var m_object;
+			var m_buffer;
+			var m_sourceName = "";
+			var m_triangleObjects = [];
+			var m_tmsTexture = null;
+			var m_tmsBankName = "";
+			var m_tmsBuffer = null;
+			var m_tmsImages = [];
+			var m_sourceType = "";
+			var m_mapSectors = null;
+			var m_textureRequest = 0;
+			var m_mapTextures = [];
+			var m_sourceRequest = 0;
+			var m_modePaths = { mdl: "DESERT.MDL", map: "ridge_racer/MAP.RRM" };
+
+			function disposeMeshMaterial(material) {
+				if (!material)
+					return;
+				if (material instanceof THREE.MultiMaterial) {
+					material.materials.forEach(function(item) { item.dispose(); });
+				} else {
+					material.dispose();
+				}
+			}
+
+			function setStatus(message, isError) {
+				var status = document.getElementById("status");
+				status.textContent = message;
+				status.dataset.error = isError ? "true" : "false";
+			}
+
+			function triangleQuality(a, b, c) {
+				var edgeAB = new THREE.Vector3().subVectors(b, a);
+				var edgeAC = new THREE.Vector3().subVectors(c, a);
+				var cross = new THREE.Vector3().crossVectors(edgeAB, edgeAC);
+				var doubledArea = cross.length();
+				if (doubledArea < 1e-8)
+					return Infinity;
+				var edgeSum = a.distanceToSquared(b) + b.distanceToSquared(c) + c.distanceToSquared(a);
+				return edgeSum / (Math.sqrt(3) * doubledArea);
+			}
+
+			function applyRenderMode() {
+				var request = ++m_textureRequest;
+				var mode = document.getElementById("renderMode").value;
+				var textured = mode === "texture" || mode === "textureSun";
+				document.getElementById("textureControls").hidden = !textured;
+				document.getElementById("mdlTextureControls").hidden = m_sourceType === "map";
+				document.getElementById("mdlPlaneControls").hidden = m_sourceType === "map";
+				if (textured) {
+					if (m_sourceType === "map")
+						applyMapTextures(request);
+					else
+						applyTmsTexture(request);
+					return;
+				}
+				if (m_tmsTexture) {
+					m_tmsTexture.dispose();
+					m_tmsTexture = null;
+				}
+				m_mapTextures.forEach(function(texture) { texture.dispose(); });
+				m_mapTextures = [];
+				var sunlightDirection = new THREE.Vector3(-0.5, 1, 0.35).normalize();
+				m_triangleObjects.forEach(function(mesh) {
+					var color = mesh.userData.blockColor;
+					disposeMeshMaterial(mesh.material);
+					if (mode === "wireframe") {
+						mesh.material = new THREE.MeshBasicMaterial({ color: 0xd8e5e3, wireframe: true, side: THREE.DoubleSide });
+					} else if (mode === "sun") {
+						mesh.material = new THREE.MeshLambertMaterial({ color: 0xc8ccce, side: THREE.DoubleSide, flatShading: false });
+					} else if (mode === "vertex") {
+						mesh.geometry.faces.forEach(function(face) {
+							face.vertexColors = face.vertexNormals.map(function(normal) {
+								var light = 0.28 + 0.72 * Math.max(0, normal.dot(sunlightDirection));
+								return color.clone().multiplyScalar(light);
+							});
+						});
+						mesh.geometry.colorsNeedUpdate = true;
+						mesh.material = new THREE.MeshBasicMaterial({ color: 0xffffff, vertexColors: THREE.VertexColors, side: THREE.DoubleSide });
+					} else {
+						mesh.material = new THREE.MeshBasicMaterial({ color: color, side: THREE.DoubleSide });
+					}
+				});
+				if (m_object && m_object.userData.summary) {
+					var suffix = mode === "vertex" ? " · couleurs par sommet calculées depuis les normales; aucun stream couleur décodé pour les meshes" : "";
+					setStatus(m_object.userData.summary + suffix, false);
+				}
+			}
+
+			function readTmsImages(buffer) {
+				var data = new DataView(buffer);
+				var images = [];
+				var position = 0;
+				var recordIndex = 0;
+				while (position + 8 <= data.byteLength) {
+					if (data.getUint32(position, true) !== 16) {
+						position += 4;
+						continue;
+					}
+					var flags = data.getUint32(position + 4, true);
+					if (flags > 15) {
+						position += 4;
+						continue;
+					}
+					var block = position + 8;
+					var clut = null;
+					var clutX = 0;
+					var clutY = 0;
+					if (flags & 8) {
+						if (block + 12 > data.byteLength)
+							break;
+						var paletteSize = data.getUint32(block, true);
+						if (paletteSize < 12 || block + paletteSize > data.byteLength)
+							break;
+						var paletteCount = Math.min(16, Math.floor((paletteSize - 12) / 2));
+						clutX = data.getUint16(block + 4, true);
+						clutY = data.getUint16(block + 6, true);
+						clut = [];
+						for (var paletteIndex = 0; paletteIndex < paletteCount; paletteIndex++)
+							clut.push(data.getUint16(block + 12 + paletteIndex * 2, true));
+						block += paletteSize;
+					}
+					if (block + 12 > data.byteLength)
+						break;
+					var blockSize = data.getUint32(block, true);
+					if (blockSize < 12 || block + blockSize > data.byteLength)
+						break;
+					var widthWords = data.getUint16(block + 8, true);
+					var height = data.getUint16(block + 10, true);
+					var planeBytes = widthWords * height * 2;
+					var payloadSize = blockSize - 12;
+					if ((flags & 7) === 0 && clut && clut.length === 16 && widthWords && height && planeBytes && payloadSize % planeBytes === 0)
+						images.push({ index: recordIndex, x: data.getUint16(block + 4, true), y: data.getUint16(block + 6, true), clutX: clutX, clutY: clutY, widthWords: widthWords, width: widthWords * 4, height: height, planeBytes: planeBytes, planeCount: payloadSize / planeBytes, pixels: block + 12, clut: clut });
+					position = block + blockSize;
+					recordIndex++;
+				}
+				return images;
+			}
+
+			function createTmsTexture(buffer, image, planeIndex) {
+					if (!Number.isInteger(planeIndex) || planeIndex < 0 || planeIndex >= image.planeCount)
+						throw new Error("Page 4-bpp absente de ce bloc image.");
+					var packedPixels = new Uint8Array(buffer, image.pixels + planeIndex * image.planeBytes, image.planeBytes);
+					var textureData = new Uint8Array(image.width * image.height * 4);
+					for (var y = 0; y < image.height; y++) {
+						for (var x = 0; x < image.width; x++) {
+							var wordOffset = y * image.widthWords * 2 + Math.floor(x / 4) * 2;
+							var word = packedPixels[wordOffset] | (packedPixels[wordOffset + 1] << 8);
+							var color = image.clut[(word >> ((x % 4) * 4)) & 0x0F];
+							var pixel = (y * image.width + x) * 4;
+							textureData[pixel] = Math.round((color & 0x1F) * 255 / 31);
+							textureData[pixel + 1] = Math.round(((color >> 5) & 0x1F) * 255 / 31);
+							textureData[pixel + 2] = Math.round(((color >> 10) & 0x1F) * 255 / 31);
+							textureData[pixel + 3] = color === 0 ? 0 : 255;
+						}
+					}
+					var texture = new THREE.DataTexture(textureData, image.width, image.height, THREE.RGBAFormat, THREE.UnsignedByteType);
+					texture.wrapS = THREE.ClampToEdgeWrapping;
+					texture.wrapT = THREE.ClampToEdgeWrapping;
+					texture.magFilter = THREE.NearestFilter;
+					texture.minFilter = THREE.NearestFilter;
+					texture.generateMipmaps = false;
+					texture.flipY = false;
+					texture.needsUpdate = true;
+					return texture;
+			}
+
+			async function applyTmsTexture(request) {
+				try {
+					if (!m_triangleObjects.length)
+						throw new Error("Charge un fichier MDL avant la texture.");
+					var bank = document.getElementById("tmsBank").value;
+					if (bank !== m_tmsBankName) {
+						var response = await fetch("ridge_racer/" + bank);
+						if (!response.ok)
+							throw new Error("Impossible de charger " + bank + ".");
+						var buffer = await response.arrayBuffer();
+						if (request !== m_textureRequest)
+							return;
+						m_tmsBuffer = buffer;
+						m_tmsImages = readTmsImages(buffer);
+						m_tmsBankName = bank;
+					}
+					var imageIndex = Number(document.getElementById("tmsImage").value);
+					var image = m_tmsImages.find(function(candidate) { return candidate.index === imageIndex; });
+					if (!image)
+						throw new Error("Bloc image TMS introuvable ou non décodable.");
+					var planeIndex = Number(document.getElementById("tmsPlane").value);
+					var texture = createTmsTexture(m_tmsBuffer, image, planeIndex);
+					var powerOfTwo = (image.width & (image.width - 1)) === 0 && (image.height & (image.height - 1)) === 0;
+					texture.wrapS = powerOfTwo ? THREE.RepeatWrapping : THREE.ClampToEdgeWrapping;
+					texture.wrapT = powerOfTwo ? THREE.RepeatWrapping : THREE.ClampToEdgeWrapping;
+					texture.minFilter = THREE.LinearFilter;
+					var outsideCount = 0;
+					var uvCount = 0;
+					m_triangleObjects.forEach(function(mesh) {
+						var geometry = mesh.geometry;
+						geometry.faceVertexUvs[0] = geometry.faces.map(function(face, faceIndex) {
+							var faceUvs = mesh.userData.uvFacePixels[faceIndex];
+							faceUvs.forEach(function(uv) {
+								if (uv[0] >= image.width || uv[1] >= image.height)
+									outsideCount++;
+								uvCount++;
+							});
+							return faceUvs.map(function(uv) { return new THREE.Vector2(uv[0] / image.width, uv[1] / image.height); });
+						});
+						geometry.uvsNeedUpdate = true;
+						geometry.__directGeometry = undefined;
+						disposeMeshMaterial(mesh.material);
+						var Material = document.getElementById("renderMode").value === "textureSun" ? THREE.MeshLambertMaterial : THREE.MeshBasicMaterial;
+						mesh.material = new Material({ map: texture, color: 0xffffff, side: THREE.DoubleSide });
+					});
+					if (m_tmsTexture)
+						m_tmsTexture.dispose();
+					m_tmsTexture = texture;
+					m_mapTextures.forEach(function(oldTexture) { oldTexture.dispose(); });
+					m_mapTextures = [];
+					document.getElementById("textureStatus").textContent = bank + " #" + imageIndex + " page " + planeIndex + " · PS1 4-bpp RGB555 · " + image.width + "×" + image.height + " · " + (uvCount - outsideCount) + "/" + uvCount + " coins UV dans la page";
+					if (m_object && m_object.userData.summary)
+						setStatus(m_object.userData.summary + " · texture " + bank + " #" + imageIndex, false);
+				} catch (error) {
+					if (request === m_textureRequest) {
+						document.getElementById("textureStatus").textContent = error.message;
+						setStatus(error.message, true);
+					}
+				}
+			}
+
+			function getMdlPrimitiveEnd(data, primitiveOffset, primitiveCount) {
+				var nextHeader = Infinity;
+				for (var objectId = 0; objectId < 128; objectId++) {
+					var headerAddress = data.getUint32(objectId * 4, false);
+					if (!headerAddress)
+						continue;
+					var headerOffset = headerAddress - 0x06048000;
+					if (headerOffset > primitiveOffset && headerOffset < nextHeader && headerOffset + 12 <= data.byteLength)
+						nextHeader = headerOffset;
+				}
+				if (nextHeader !== Infinity)
+					return nextHeader;
+				return Math.min(data.byteLength, primitiveOffset + primitiveCount * 12);
+			}
+
+			function decodeMdlPrimitives(data, objectData) {
+				var records = [];
+				var position = objectData.primitiveOffset;
+				for (var primitiveIndex = 0; primitiveIndex < objectData.primitiveCount; primitiveIndex++) {
+					var remainingRecords = objectData.primitiveCount - primitiveIndex - 1;
+					var record = null;
+					for (var arity = 4; arity >= 3; arity--) {
+						var nextPosition = position + 4 + arity * 2;
+						var remainingBytes = objectData.primitiveEnd - nextPosition;
+						if (nextPosition > objectData.primitiveEnd || remainingBytes < remainingRecords * 10 || remainingBytes > remainingRecords * 12 + 2)
+							continue;
+
+						var references = [];
+						var valid = true;
+						for (var referenceIndex = 0; referenceIndex < arity; referenceIndex++) {
+							var reference = data.getUint16(position + 4 + referenceIndex * 2, false);
+							if (reference % 16 !== 0 || reference / 16 >= objectData.vertexCount) {
+								valid = false;
+								break;
+							}
+							references.push(reference / 16);
+						}
+						if (!valid)
+							continue;
+
+						record = {
+							indices: references,
+							uvCorners: [
+								[data.getUint8(position), data.getUint8(position + 1)],
+								[data.getUint8(position + 2), data.getUint8(position + 3)]
+							]
+						};
+						position = nextPosition;
+						break;
+					}
+					if (!record)
+						throw new Error("Primitive illisible pour l'objet " + objectData.id + " à l'index " + primitiveIndex + ".");
+					records.push(record);
+				}
+
+				var padding = objectData.primitiveEnd - position;
+				if (padding < 0 || padding > 2)
+					throw new Error("Fin de bloc primitive inattendue pour l'objet " + objectData.id + ".");
+				return records;
+			}
+
+			function renderMdlObjects(objects) {
+				var group = new THREE.Object3D();
+				var minimum = new THREE.Vector3(Infinity, Infinity, Infinity);
+				var maximum = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
+				var data = new DataView(m_buffer);
+				var totalVertices = 0;
+				var quadCount = 0;
+				var triangleCount = 0;
+				m_triangleObjects = [];
+
+				objects.forEach(function(objectData) {
+					var meshGeometry = new THREE.Geometry();
+					var color = new THREE.Color();
+					color.setHSL((objectData.id * 0.61803398875) % 1, 0.72, 0.56);
+					for (var index = 0; index < objectData.vertexCount; index++) {
+						var position = objectData.vertexOffset + index * 6;
+						var x = data.getInt16(position, false);
+						var y = data.getInt16(position + 2, false);
+						var z = data.getInt16(position + 4, false);
+						var vertex = new THREE.Vector3(x, y, z);
+						meshGeometry.vertices.push(vertex.clone());
+						minimum.x = Math.min(minimum.x, x);
+						minimum.y = Math.min(minimum.y, y);
+						minimum.z = Math.min(minimum.z, z);
+						maximum.x = Math.max(maximum.x, x);
+						maximum.y = Math.max(maximum.y, y);
+						maximum.z = Math.max(maximum.z, z);
+					}
+
+					var primitiveRecords = decodeMdlPrimitives(data, objectData);
+					var uvFacePixels = [];
+					var addFace = function(a, b, c, uvByVertex) {
+						meshGeometry.faces.push(new THREE.Face3(a, b, c));
+						uvFacePixels.push([uvByVertex[a], uvByVertex[b], uvByVertex[c]].map(function(uv) { return uv.slice(); }));
+					};
+					primitiveRecords.forEach(function(record) {
+						var references = record.indices;
+						var uv0 = record.uvCorners[0];
+						var uv1 = record.uvCorners[1];
+						var uvByVertex = {};
+						uvByVertex[references[0]] = uv0;
+						uvByVertex[references[1]] = [uv1[0], uv0[1]];
+						if (references.length === 4) {
+							uvByVertex[references[2]] = uv1;
+							uvByVertex[references[3]] = [uv0[0], uv1[1]];
+						} else {
+							uvByVertex[references[2]] = uv1;
+						}
+						if (references.length === 4) {
+							var vertexA = meshGeometry.vertices[references[0]];
+							var vertexB = meshGeometry.vertices[references[1]];
+							var vertexC = meshGeometry.vertices[references[2]];
+							var vertexD = meshGeometry.vertices[references[3]];
+							var qualityAC = Math.max(triangleQuality(vertexA, vertexB, vertexC), triangleQuality(vertexA, vertexC, vertexD));
+							var qualityBD = Math.max(triangleQuality(vertexA, vertexB, vertexD), triangleQuality(vertexB, vertexC, vertexD));
+							if (qualityAC <= qualityBD) {
+								addFace(references[0], references[1], references[2], uvByVertex);
+								addFace(references[0], references[2], references[3], uvByVertex);
+							} else {
+								addFace(references[0], references[1], references[3], uvByVertex);
+								addFace(references[1], references[2], references[3], uvByVertex);
+							}
+							quadCount++;
+						} else {
+							addFace(references[0], references[1], references[2], uvByVertex);
+							triangleCount++;
+						}
+					});
+
+					meshGeometry.computeFaceNormals();
+					meshGeometry.computeVertexNormals();
+					meshGeometry.computeBoundingSphere();
+					var material = new THREE.MeshBasicMaterial({ color: color, side: THREE.DoubleSide });
+					var mesh = new THREE.Mesh(meshGeometry, material);
+					mesh.userData.blockColor = color.clone();
+					mesh.userData.uvFacePixels = uvFacePixels;
+					m_triangleObjects.push(mesh);
+					group.add(mesh);
+					totalVertices += objectData.vertexCount;
+				});
+
+				if (group.children.length === 0)
+					throw new Error("Aucun objet MDL valide trouvé.");
+				group.userData.vertexCount = totalVertices;
+				group.userData.objectCount = objects.length;
+				group.userData.faceCount = quadCount * 2 + triangleCount;
+				group.userData.minimum = minimum.clone();
+				group.userData.maximum = maximum.clone();
+				var blockLabel = objects.length === 1 ? "objet" : objects.length + " blocs";
+				group.userData.summary = m_sourceName + " · " + blockLabel + " · " + totalVertices + " vertices · " + (quadCount + triangleCount) + " primitives · " + (quadCount * 2 + triangleCount) + " faces";
+				if (m_object)
+					m_viewer.remove(m_object);
+				m_object = group;
+				m_viewer.scene.add(group);
+
+				m_viewer.fitToBounds(minimum, maximum);
+				applyRenderMode();
+				setStatus(group.userData.summary, false);
+			}
+
+			function loadMdlObject() {
+				if (!m_buffer)
+					return setStatus("Charge d'abord un fichier MDL.", true);
+				try {
+					var objectId = Number(document.getElementById("objectId").value);
+					var addressBase = 0x06048000;
+					var data = new DataView(m_buffer);
+					if (!Number.isInteger(objectId) || objectId < 0 || objectId >= 128)
+						throw new Error("L'indice objet doit être compris entre 0 et 127.");
+					var headerAddress = data.getUint32(objectId * 4, false);
+					var headerOffset = headerAddress - addressBase;
+					if (headerAddress === 0 || headerOffset < 0 || headerOffset + 12 > data.byteLength)
+						throw new Error("Aucun objet valide à cet indice.");
+					var vertexCount = data.getUint16(headerOffset, false);
+					var primitiveCount = data.getUint16(headerOffset + 2, false);
+					var vertexOffset = data.getUint32(headerOffset + 4, false) - addressBase;
+					var primitiveOffset = data.getUint32(headerOffset + 8, false) - addressBase;
+					if (vertexCount === 0 || vertexOffset < 0 || vertexOffset + vertexCount * 6 > data.byteLength)
+						throw new Error("La plage de vertices de cet objet est invalide.");
+					var primitiveEnd = getMdlPrimitiveEnd(data, primitiveOffset, primitiveCount);
+					if (primitiveCount && (primitiveOffset < 0 || primitiveEnd - primitiveOffset < primitiveCount * 10 || primitiveEnd > data.byteLength))
+						throw new Error("La plage de primitives de cet objet est invalide.");
+
+					m_sourceName = "Objet " + objectId;
+					renderMdlObjects([{ id: objectId, vertexOffset: vertexOffset, vertexCount: vertexCount, primitiveOffset: primitiveOffset, primitiveCount: primitiveCount, primitiveEnd: primitiveEnd }]);
+				} catch (error) {
+					setStatus(error.message, true);
+				}
+			}
+
+			function loadMdlCircuit() {
+				if (!m_buffer)
+					return setStatus("Charge d'abord un fichier MDL.", true);
+				try {
+					var data = new DataView(m_buffer);
+					var addressBase = 0x06048000;
+					var objects = [];
+					var totalVertices = 0;
+					var totalPrimitives = 0;
+					for (var objectId = 0; objectId < 128; objectId++) {
+						var headerOffset = data.getUint32(objectId * 4, false) - addressBase;
+						if (headerOffset < 0 || headerOffset + 12 > data.byteLength)
+							continue;
+						var vertexCount = data.getUint16(headerOffset, false);
+						var primitiveCount = data.getUint16(headerOffset + 2, false);
+						var vertexOffset = data.getUint32(headerOffset + 4, false) - addressBase;
+						var primitiveOffset = data.getUint32(headerOffset + 8, false) - addressBase;
+						var primitiveEnd = getMdlPrimitiveEnd(data, primitiveOffset, primitiveCount);
+						if (!vertexCount || vertexOffset < 0 || vertexOffset + vertexCount * 6 > data.byteLength)
+							continue;
+						if (primitiveCount && (primitiveOffset < 0 || primitiveEnd - primitiveOffset < primitiveCount * 10 || primitiveEnd > data.byteLength))
+							continue;
+						objects.push({ id: objectId, vertexOffset: vertexOffset, vertexCount: vertexCount, primitiveOffset: primitiveOffset, primitiveCount: primitiveCount, primitiveEnd: primitiveEnd });
+						totalVertices += vertexCount;
+						totalPrimitives += primitiveCount;
+					}
+					if (!objects.length)
+						throw new Error("Aucun objet MDL valide trouvé.");
+
+					m_sourceName = "Circuit complet";
+					renderMdlObjects(objects);
+				} catch (error) {
+					setStatus(error.message, true);
+				}
+			}
+
+			async function loadSource(buffer, name, request, mode) {
+				if (mode === "map" && /\.RRM$/i.test(name)) {
+					var sectors = MapDecode.parse(buffer);
+					var indexFile = document.getElementById("indexFile").files[0];
+					var indexBuffer;
+					if (indexFile) {
+						indexBuffer = await indexFile.arrayBuffer();
+					} else {
+						var indexPath = document.getElementById("indexPath").value.trim();
+						if (!indexPath)
+							throw new Error("Indique le chemin de IDX.HED ou sélectionne un fichier.");
+						var indexResponse = await fetch(indexPath);
+						if (!indexResponse.ok)
+							throw new Error("Impossible de charger IDX.HED : HTTP " + indexResponse.status + " pour " + indexPath);
+						indexBuffer = await indexResponse.arrayBuffer();
+					}
+					if (request !== m_sourceRequest || mode !== document.getElementById("sourceMode").value)
+						return;
+					sectors = MapDecode.placeSections(sectors, indexBuffer);
+					m_textureRequest++;
+					m_buffer = buffer;
+					m_mapSectors = sectors;
+					m_sourceType = "map";
+					document.getElementById("objectId").max = sectors.length - 1;
+					loadMapSelection(false);
+				} else if (mode === "mdl" && /\.MDL$/i.test(name)) {
+					m_textureRequest++;
+					m_buffer = buffer;
+					m_mapSectors = null;
+					m_sourceType = "mdl";
+					document.getElementById("objectId").max = 127;
+					loadMdlCircuit();
+				} else {
+					throw new Error(mode === "mdl" ? "Gran Turismo accepte uniquement les fichiers .MDL." : "Ridge Racer 1 accepte uniquement les fichiers .RRM.");
+				}
+			}
+
+			async function loadPath() {
+				var path = document.getElementById("sourcePath").value.trim();
+				var mode = document.getElementById("sourceMode").value;
+				var request = ++m_sourceRequest;
+				if (!path)
+					return setStatus("Indique un chemin de fichier.", true);
+				if (!(mode === "mdl" ? /\.MDL$/i : /\.RRM$/i).test(path))
+					return setStatus(mode === "mdl" ? "Gran Turismo accepte uniquement les fichiers .MDL." : "Ridge Racer 1 accepte uniquement les fichiers .RRM.", true);
+				m_modePaths[mode] = path;
+				setStatus("Chargement de " + path + "...", false);
+				try {
+					var response = await fetch(path);
+					if (!response.ok)
+						throw new Error("HTTP " + response.status + " pour " + path);
+					var buffer = await response.arrayBuffer();
+					if (request === m_sourceRequest && mode === document.getElementById("sourceMode").value)
+						await loadSource(buffer, path, request, mode);
+				} catch (error) {
+					if (request === m_sourceRequest)
+						setStatus("Impossible de charger le fichier. Utilise un serveur local ou choisis-le depuis le disque. " + error.message, true);
+				}
+			}
+
+			async function loadLocalSource() {
+				var file = document.getElementById("localFile").files[0];
+				if (!file)
+					return;
+				var request = ++m_sourceRequest;
+				var mode = document.getElementById("sourceMode").value;
+				try {
+					var buffer = await file.arrayBuffer();
+					if (request === m_sourceRequest && mode === document.getElementById("sourceMode").value)
+						await loadSource(buffer, file.name, request, mode);
+				} catch (error) {
+					if (request === m_sourceRequest)
+						setStatus(error.message, true);
+				}
+			}
+
+			function changeSourceMode() {
+				var mode = document.getElementById("sourceMode").value;
+				m_sourceRequest++;
+				m_textureRequest++;
+				m_viewer.clearSky();
+				document.getElementById("skyStatus").textContent = "";
+				m_buffer = null;
+				m_mapSectors = null;
+				m_sourceType = "";
+				if (m_object)
+					m_viewer.remove(m_object);
+				m_object = null;
+				m_triangleObjects = [];
+				if (m_tmsTexture) {
+					m_tmsTexture.dispose();
+					m_tmsTexture = null;
+				}
+				m_mapTextures.forEach(function(texture) { texture.dispose(); });
+				m_mapTextures = [];
+				document.getElementById("sourcePath").value = m_modePaths[mode];
+				document.getElementById("objectId").value = 0;
+				document.getElementById("objectId").max = mode === "mdl" ? 127 : 257;
+				document.getElementById("sourceLegend").textContent = mode === "mdl" ? "Gran Turismo · Fichier MDL" : "Ridge Racer 1 · Fichier MAP.RRM";
+				document.getElementById("loadCircuit").textContent = "Charger le circuit complet";
+				document.getElementById("mapWarning").hidden = mode !== "map";
+				document.getElementById("buildingStatus").textContent = "";
+				document.getElementById("mapIndexControls").hidden = mode !== "map";
+				document.getElementById("localFile").value = "";
+				loadPath();
+			}
+
+			function start() {
+				var container = document.getElementById("container");
+				m_viewer = new Sceneview("container", container.clientWidth, container.clientHeight || window.innerHeight);
+				document.getElementById("sourceMode").addEventListener("change", changeSourceMode);
+				document.getElementById("loadPath").addEventListener("click", function() {
+					document.getElementById("localFile").value = "";
+					loadPath();
+				});
+				document.getElementById("loadObject").addEventListener("click", function() {
+					if (m_sourceType === "map") loadMapSelection(true);
+					else loadMdlObject();
+				});
+				document.getElementById("loadCircuit").addEventListener("click", function() {
+					if (m_sourceType === "map") loadMapSelection(false);
+					else loadMdlCircuit();
+				});
+				document.getElementById("topView").addEventListener("click", function() {
+					if (!m_object || !m_object.userData.minimum)
+						return setStatus("Charge un objet MDL avant de cadrer la vue.", true);
+					m_viewer.fitTopDownToBounds(m_object.userData.minimum, m_object.userData.maximum);
+				});
+				document.getElementById("renderMode").addEventListener("change", applyRenderMode);
+				document.getElementById("tmsBank").addEventListener("change", function() {
+					if (document.getElementById("renderMode").value === "texture" || document.getElementById("renderMode").value === "textureSun")
+						applyRenderMode();
+				});
+				document.getElementById("tmsImage").addEventListener("change", function() {
+					if (document.getElementById("renderMode").value === "texture" || document.getElementById("renderMode").value === "textureSun")
+						applyRenderMode();
+				});
+				document.getElementById("tmsPlane").addEventListener("change", function() {
+					if (document.getElementById("renderMode").value === "texture" || document.getElementById("renderMode").value === "textureSun")
+						applyRenderMode();
+				});
+				document.getElementById("localFile").addEventListener("change", loadLocalSource);
+				document.getElementById("indexFile").addEventListener("change", function() {
+					if (document.getElementById("sourceMode").value === "map") {
+						if (document.getElementById("localFile").files.length)
+							loadLocalSource();
+						else
+							loadPath();
+					}
+				});
+				window.addEventListener("resize", function() {
+					m_viewer.resize();
+				});
+				loadPath();
+			}
+
+			start();
+		</script>
+	</body>
+</html>
