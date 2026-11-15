@@ -30,6 +30,9 @@ for (let i = 0; i < 8; i++)
 const wallClut = wallRecord + 12;
 const wallImage = wallClut + big1.getUint32(wallClut, true);
 function checkTrack(sectors, points, name) {
+	const THREE = require("../js/three.js");
+	const curve = new THREE.CatmullRomCurve3(points.map(point => new THREE.Vector3(...point)));
+	curve.closed = true;
 	const bins = new Map();
 	for (const section of sectors) {
 		for (const primitive of section.primitives) {
@@ -56,16 +59,21 @@ function checkTrack(sectors, points, name) {
 		const end = points[(index + 1) % points.length];
 		assert.ok(Math.hypot(end[0] - start[0], end[2] - start[2]) < 540, `${name}: discontinuité au point ${index}`);
 		for (const fraction of [0, 0.25, 0.5, 0.75]) {
-			const [x, y, z] = start.map((value, axis) => value + (end[axis] - value) * fraction);
-			const triangles = bins.get(`${Math.floor(x / 2048)},${Math.floor(z / 2048)}`) || [];
-			assert.ok(triangles.some(({ a, b, c, determinant, minX, maxX, minZ, maxZ }) => {
-				if (x < minX || x > maxX || z < minZ || z > maxZ)
-					return false;
-				const u = ((b[2] - c[2]) * (x - c[0]) + (c[0] - b[0]) * (z - c[2])) / determinant;
-				const v = ((c[2] - a[2]) * (x - c[0]) + (a[0] - c[0]) * (z - c[2])) / determinant;
-				return u >= -1e-8 && v >= -1e-8 && u + v <= 1 + 1e-8 &&
-					Math.abs(u * a[1] + v * b[1] + (1 - u - v) * c[1] - y) <= 32;
-			}), `${name}: chaussée absente sous le tracé au point ${index}, fraction ${fraction}`);
+			const positions = [
+				start.map((value, axis) => value + (end[axis] - value) * fraction),
+				curve.getPoint((index + fraction) / points.length).toArray()
+			];
+			for (const [x, y, z] of positions) {
+				const triangles = bins.get(`${Math.floor(x / 2048)},${Math.floor(z / 2048)}`) || [];
+				assert.ok(triangles.some(({ a, b, c, determinant, minX, maxX, minZ, maxZ }) => {
+					if (x < minX || x > maxX || z < minZ || z > maxZ)
+						return false;
+					const u = ((b[2] - c[2]) * (x - c[0]) + (c[0] - b[0]) * (z - c[2])) / determinant;
+					const v = ((c[2] - a[2]) * (x - c[0]) + (a[0] - c[0]) * (z - c[2])) / determinant;
+					return u >= -1e-8 && v >= -1e-8 && u + v <= 1 + 1e-8 &&
+						Math.abs(u * a[1] + v * b[1] + (1 - u - v) * c[1] - y) <= 32;
+				}), `${name}: chaussée absente sous le tracé au point ${index}, fraction ${fraction}`);
+			}
 		}
 	});
 }

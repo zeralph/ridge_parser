@@ -178,24 +178,46 @@ Sceneview.prototype.setFlyPath = function(coordinates, normalDirection) {
 	var distances = [0];
 	for (var i = 0; i < points.length; i++)
 		distances.push(distances[i] + points[i].distanceTo(points[(i + 1) % points.length]));
+	var curve = null, samples = points, sampleDistances = distances, parameters = null;
+	if (points.length > 2) {
+		curve = new THREE.CatmullRomCurve3(points);
+		curve.closed = true;
+		samples = [curve.getPoint(0)];
+		sampleDistances = [0];
+		parameters = [0];
+		var count = points.length * 64;
+		for (var sampleIndex = 1; sampleIndex <= count; sampleIndex++) {
+			var parameter = sampleIndex / count;
+			var sample = curve.getPoint(parameter);
+			var segmentLength = sample.distanceTo(samples[samples.length - 1]);
+			if (segmentLength > 0) {
+				samples.push(sample);
+				parameters.push(parameter);
+				sampleDistances.push(sampleDistances[sampleDistances.length - 1] + segmentLength);
+			}
+		}
+	}
 	this.stopRr4Fly();
-	this.rr4Fly = { points: points, distances: distances, length: distances[points.length], active: false,
-		normalDirection: normalDirection };
+	this.rr4Fly = { points: points, distances: distances, curve: curve, samples: samples,
+		sampleDistances: sampleDistances, parameters: parameters,
+		length: sampleDistances[sampleDistances.length - 1], active: false, normalDirection: normalDirection };
 };
 
 Sceneview.prototype.rr4FlyPoint = function(distance) {
 	var path = this.rr4Fly;
 	distance = ((distance % path.length) + path.length) % path.length;
-	var low = 0, high = path.points.length;
+	var low = 0, high = path.sampleDistances.length - 1;
 	while (low + 1 < high) {
 		var middle = Math.floor((low + high) / 2);
-		if (path.distances[middle] <= distance)
+		if (path.sampleDistances[middle] <= distance)
 			low = middle;
 		else
 			high = middle;
 	}
-	var fraction = (distance - path.distances[low]) / (path.distances[low + 1] - path.distances[low]);
-	return path.points[low].clone().lerp(path.points[(low + 1) % path.points.length], fraction);
+	var fraction = (distance - path.sampleDistances[low]) / (path.sampleDistances[low + 1] - path.sampleDistances[low]);
+	if (path.curve)
+		return path.curve.getPoint(path.parameters[low] + fraction * (path.parameters[low + 1] - path.parameters[low]));
+	return path.samples[low].clone().lerp(path.samples[(low + 1) % path.samples.length], fraction);
 };
 
 Sceneview.prototype.nearestRr4FlyDistance = function(height) {
@@ -203,8 +225,9 @@ Sceneview.prototype.nearestRr4FlyDistance = function(height) {
 	var camera = this.camera.position;
 	var roadHeight = camera.y - height;
 	var bestHorizontal = Infinity, bestVertical = Infinity, bestDistance = 0;
-	for (var i = 0; i < path.points.length; i++) {
-		var start = path.points[i], end = path.points[(i + 1) % path.points.length];
+	var candidates = [];
+	for (var i = 0; i < path.sampleDistances.length - 1; i++) {
+		var start = path.samples[i], end = path.samples[(i + 1) % path.samples.length];
 		var dx = end.x - start.x, dy = end.y - start.y, dz = end.z - start.z;
 		var horizontalLength = dx * dx + dz * dz;
 		var fraction = horizontalLength ?
@@ -215,12 +238,55 @@ Sceneview.prototype.nearestRr4FlyDistance = function(height) {
 		var z = start.z + dz * fraction - camera.z;
 		var y = start.y + dy * fraction - roadHeight;
 		var horizontal = x * x + z * z, vertical = y * y;
+		if (path.curve)
+			candidates.push({ index: i, horizontal: horizontal, length: Math.sqrt(dx * dx + dy * dy + dz * dz) });
 		if (horizontal < bestHorizontal - 1e-9 ||
 			(Math.abs(horizontal - bestHorizontal) <= 1e-9 && vertical < bestVertical)) {
 			bestHorizontal = horizontal;
 			bestVertical = vertical;
-			bestDistance = path.distances[i] + fraction * (path.distances[i + 1] - path.distances[i]);
+			bestDistance = path.sampleDistances[i] + fraction * (path.sampleDistances[i + 1] - path.sampleDistances[i]);
 		}
+	}
+	if (path.curve) {
+		var approximateBest = Math.sqrt(bestHorizontal);
+		bestHorizontal = Infinity;
+		bestVertical = Infinity;
+		candidates.forEach(function(candidate) {
+			if (Math.sqrt(candidate.horizontal) > approximateBest + candidate.length)
+				return;
+			var index = candidate.index;
+			var from = path.parameters[index], to = path.parameters[index + 1];
+			var start = path.samples[index], end = path.samples[index + 1];
+			var verticalOnly = start.x === end.x && start.z === end.z;
+			function score(parameter) {
+				var point = path.curve.getPoint(parameter);
+				var dx = point.x - camera.x, dz = point.z - camera.z, dy = point.y - roadHeight;
+				return { horizontal: dx * dx + dz * dz, vertical: dy * dy };
+			}
+			function consider(parameter) {
+				var value = score(parameter);
+				if (value.horizontal < bestHorizontal - 1e-12 ||
+					(Math.abs(value.horizontal - bestHorizontal) <= 1e-12 && value.vertical < bestVertical)) {
+					bestHorizontal = value.horizontal;
+					bestVertical = value.vertical;
+					bestDistance = path.sampleDistances[index] + (parameter - from) / (to - from) *
+						(path.sampleDistances[index + 1] - path.sampleDistances[index]);
+				}
+			}
+			consider(from);
+			consider(to);
+			var left = from, right = to;
+			for (var iteration = 0; iteration < 45; iteration++) {
+				var a = (2 * left + right) / 3, b = (left + 2 * right) / 3;
+				var aScore = score(a), bScore = score(b);
+				if ((verticalOnly ? aScore.vertical : aScore.horizontal) <
+					(verticalOnly ? bScore.vertical : bScore.horizontal))
+					right = b;
+				else
+					left = a;
+			}
+			consider((left + right) / 2);
+		});
 	}
 	return bestDistance;
 };
@@ -229,7 +295,7 @@ Sceneview.prototype.updateRr4FlyCamera = function() {
 	var path = this.rr4Fly;
 	var position = this.rr4FlyPoint(path.distance);
 	var direction = path.direction === "normal" ? path.normalDirection : -path.normalDirection;
-	var target = this.rr4FlyPoint(path.distance + direction * Math.min(300, path.length / 4));
+	var target = this.rr4FlyPoint(path.distance + direction * Math.min(600, path.length / 4));
 	position.y += path.height;
 	target.y += path.height;
 	this.camera.position.copy(position);

@@ -131,6 +131,12 @@ expectedCourseSamples.forEach((sampleCount, course) => {
 	scene.samples.forEach((sample, index) =>
 		assert.ok(roadSampleCovered(sample, surfaces, true),
 			`Chaussée non visible du dessus circuit ${course + 1}, échantillon ${index}`));
+	pathViewer.rr4Fly.samples.forEach((point, index) => {
+		if (index % 32 !== 0)
+			return;
+		assert.ok(roadSampleCovered({ x: point.x, z: -point.z, height: -point.y * 4 }, surfaces, true),
+			`Trajectoire lissée hors chaussée circuit ${course + 1}, échantillon ${index}`);
+	});
 	assert.equal(scene.sky.length, 3);
 	assert.ok(scene.sky.every(layer => layer.vertices.length && layer.primitives.length));
 	if (course === 1) {

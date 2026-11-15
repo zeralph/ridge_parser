@@ -214,10 +214,11 @@ viewer.camera.position.set(0, 120, 0);
 viewer.startRr4Fly(100, 100, "inverse");
 viewer.advanceRr4Fly(1000);
 viewer.advanceRr4Fly(6000);
-close(viewer.camera.position.x, 500);
+close(viewer.camera.position.x, viewer.rr4FlyPoint(500).x);
 assert.ok(viewer.camera.getWorldDirection().x > 0, "La caméra regarde dans le sens du mouvement");
+const beforeReverse = viewer.camera.position.clone();
 viewer.configureRr4Fly(100, 100, "normal");
-close(viewer.camera.position.x, 500);
+assert.ok(viewer.camera.position.equals(beforeReverse));
 assert.ok(viewer.camera.getWorldDirection().x < 0, "L'inversion change le sens du regard sans déplacer la caméra");
 viewer.setRr4FlyPath(road);
 assert.equal(viewer.controls.enabled, true, "Changer de circuit réactive la caméra orbitale");
@@ -233,16 +234,22 @@ assert.equal(viewer.rr4Fly, null);
 viewer.setRr4FlyPath(road);
 viewer.camera.position.set(750, 999, 300);
 viewer.startRr4Fly(100, 100, "inverse");
-close(viewer.camera.position.x, 750);
-close(viewer.camera.position.y, 120);
-close(viewer.camera.position.z, 0);
-close(viewer.rr4Fly.distance, 750);
+const nearest = viewer.rr4FlyPoint(viewer.rr4Fly.distance);
+assert.ok(Math.hypot(nearest.x - 750, nearest.z - 300) < 300);
+for (const offset of [-1, 1]) {
+	const nearby = viewer.rr4FlyPoint(viewer.rr4Fly.distance + offset);
+	assert.ok(Math.hypot(nearest.x - 750, nearest.z - 300) <= Math.hypot(nearby.x - 750, nearby.z - 300));
+}
+close(viewer.camera.position.y, nearest.y + 100);
 viewer.stopRr4Fly();
 viewer.camera.position.set(100, 145, -500);
 viewer.startRr4Fly(100, 100, "normal");
-close(viewer.camera.position.x, 0);
-close(viewer.camera.position.y, 145);
-close(viewer.camera.position.z, -500);
+const nearestSlope = viewer.rr4FlyPoint(viewer.rr4Fly.distance);
+for (const offset of [-1, 1]) {
+	const nearby = viewer.rr4FlyPoint(viewer.rr4Fly.distance + offset);
+	assert.ok(Math.hypot(nearestSlope.x - 100, nearestSlope.z + 500) <= Math.hypot(nearby.x - 100, nearby.z + 500));
+}
+close(viewer.camera.position.y, nearestSlope.y + 100);
 viewer.stopRr4Fly();
 
 const crossing = [
@@ -252,7 +259,7 @@ const crossing = [
 viewer.setRr4FlyPath(crossing);
 viewer.camera.position.set(0, 500, 0);
 viewer.startRr4Fly(100, 100, "normal");
-close(viewer.camera.position.y, 500);
+assert.ok(viewer.camera.position.y > 300, "Le pont supérieur reste privilégié au croisement");
 viewer.stopRr4Fly();
 
 viewer.setRr4FlyPath([roadSample(0, 0, 0), roadSample(0, 0, -4000)]);
@@ -272,30 +279,42 @@ animate.call(viewer);
 now = 2000;
 animate.call(viewer);
 assert.equal(renderedCamera, viewer.camera);
-close(viewer.camera.position.x, 100);
+close(viewer.rr4Fly.distance, 100);
 context.document.hidden = true;
 now = 12000;
 animate.call(viewer);
 context.document.hidden = false;
 now = 13000;
 animate.call(viewer);
-close(viewer.camera.position.x, 100, "La caméra ne doit pas avancer pendant que la page est masquée");
+close(viewer.rr4Fly.distance, 100, "La caméra ne doit pas avancer pendant que la page est masquée");
 now = 14000;
 animate.call(viewer);
-close(viewer.camera.position.x, 200);
+close(viewer.rr4Fly.distance, 200);
 
 viewer.setFlyPath([[0, 0, 0], [2000, 0, 0], [2000, 100, 2000], [0, 100, 2000]], 1);
+for (const index of [0, 64, 128, 192]) {
+	const distance = viewer.rr4Fly.sampleDistances[index];
+	const previous = viewer.rr4FlyPoint(distance - 1);
+	const corner = viewer.rr4FlyPoint(distance);
+	const next = viewer.rr4FlyPoint(distance + 1);
+	assert.ok(corner.clone().sub(previous).normalize().dot(next.clone().sub(corner).normalize()) > 0.999,
+		"La trajectoire doit tourner progressivement, y compris à la fermeture de la boucle");
+}
+for (let distance = 0; distance < viewer.rr4Fly.length; distance += 200) {
+	const travelled = viewer.rr4FlyPoint(distance).distanceTo(viewer.rr4FlyPoint(distance + 20));
+	assert.ok(Math.abs(travelled - 20) < 0.2, "La vitesse doit rester approximativement constante");
+}
 viewer.camera.position.set(500, 100, 20);
 viewer.startRr4Fly(100, 100, "normal");
-close(viewer.camera.position.x, 500);
 assert.ok(viewer.camera.getWorldDirection().x > 0);
+const initialDistance = viewer.rr4Fly.distance;
 viewer.advanceRr4Fly(1000);
 viewer.advanceRr4Fly(2000);
-close(viewer.camera.position.x, 600);
+close(viewer.rr4Fly.distance, initialDistance + 100);
 viewer.configureRr4Fly(100, 100, "inverse");
 assert.ok(viewer.camera.getWorldDirection().x < 0);
 viewer.advanceRr4Fly(3000);
-close(viewer.camera.position.x, 500);
+close(viewer.rr4Fly.distance, initialDistance);
 viewer.clearRr4FlyPath();
 assert.equal(viewer.controls.enabled, true);
 assert.throws(() => viewer.setFlyPath([[0, 0, 0], [NaN, 0, 0]], 1), /invalide/);
