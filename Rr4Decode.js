@@ -9,6 +9,106 @@ var Rr4Decode = {
 		return [x, -y, -z];
 	},
 
+	assignDepthLayers: function(primitives) {
+		function gcd(a, b) {
+			while (b) {
+				var remainder = a % b;
+				a = b;
+				b = remainder;
+			}
+			return a;
+		}
+		function overlaps(a, b) {
+			var triangles = [a, b];
+			for (var t = 0; t < 2; t++) {
+				for (var i = 0; i < 3; i++) {
+					var p = triangles[t][i], q = triangles[t][(i + 1) % 3];
+					var dx = q[0] - p[0], dy = q[1] - p[1];
+					var minA = Infinity, maxA = -Infinity, minB = Infinity, maxB = -Infinity;
+					for (var j = 0; j < 3; j++) {
+						var projectionA = a[j][0] * dy - a[j][1] * dx;
+						var projectionB = b[j][0] * dy - b[j][1] * dx;
+						minA = Math.min(minA, projectionA);
+						maxA = Math.max(maxA, projectionA);
+						minB = Math.min(minB, projectionB);
+						maxB = Math.max(maxB, projectionB);
+					}
+					if (maxA <= minB || maxB <= minA)
+						return false;
+				}
+			}
+			return true;
+		}
+
+		var planes = new Map();
+		var behind = primitives.map(function(primitive) {
+			primitive.depthLayer = 0;
+			return new Set();
+		});
+		primitives.forEach(function(primitive, index) {
+			var faces = primitive.vertices.length === 4 ? [[0, 1, 2], [1, 3, 2]] : [[0, 1, 2]];
+			faces.forEach(function(indices) {
+				var a = primitive.vertices[indices[0]], b = primitive.vertices[indices[1]];
+				var c = primitive.vertices[indices[2]];
+				var ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2];
+				var vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
+				var nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+				var divisor = gcd(gcd(Math.abs(nx), Math.abs(ny)), Math.abs(nz));
+				if (!divisor)
+					return;
+				nx /= divisor;
+				ny /= divisor;
+				nz /= divisor;
+				var sign = Math.sign(nx || ny || nz);
+				nx *= sign;
+				ny *= sign;
+				nz *= sign;
+				// Integer-normalized planes keep nearby, non-coplanar surfaces separate.
+				var key = [nx, ny, nz, nx * a[0] + ny * a[1] + nz * a[2]].join(",");
+				var drop = Math.abs(nx) >= Math.abs(ny) && Math.abs(nx) >= Math.abs(nz) ? 0 :
+					Math.abs(ny) >= Math.abs(nz) ? 1 : 2;
+				var triangle = indices.map(function(vertex) {
+					return primitive.vertices[vertex].filter(function(value, axis) { return axis !== drop; });
+				});
+				var xs = triangle.map(function(point) { return point[0]; });
+				var ys = triangle.map(function(point) { return point[1]; });
+				var record = { index: index, sign: sign, triangle: triangle,
+					minX: Math.min.apply(null, xs), maxX: Math.max.apply(null, xs),
+					minY: Math.min.apply(null, ys), maxY: Math.max.apply(null, ys) };
+				if (!planes.has(key))
+					planes.set(key, []);
+				planes.get(key).push(record);
+			});
+		});
+		function priority(a, b) {
+			// Equal-bias order depends on native visibility; stream order is an approximation.
+			return primitives[a].orderingBias - primitives[b].orderingBias ||
+				primitives[a].stream - primitives[b].stream ||
+				primitives[a].sourceIndex - primitives[b].sourceIndex;
+		}
+		planes.forEach(function(triangles) {
+			triangles.sort(function(a, b) { return a.minX - b.minX; });
+			for (var i = 0; i < triangles.length; i++) {
+				for (var j = i + 1; j < triangles.length && triangles[j].minX < triangles[i].maxX; j++) {
+					var a = triangles[i], b = triangles[j];
+					if (a.index === b.index || a.sign !== b.sign || a.maxY <= b.minY || b.maxY <= a.minY ||
+						!overlaps(a.triangle, b.triangle))
+						continue;
+					var first = priority(a.index, b.index) < 0 ? a.index : b.index;
+					var last = first === a.index ? b.index : a.index;
+					behind[first].add(last);
+				}
+			}
+		});
+		var order = primitives.map(function(primitive, index) { return index; });
+		order.sort(function(a, b) { return priority(b, a); });
+		order.forEach(function(index) {
+			behind[index].forEach(function(other) {
+				primitives[index].depthLayer = Math.max(primitives[index].depthLayer, primitives[other].depthLayer + 1);
+			});
+		});
+	},
+
 	parseTrackResource: function(buffer) {
 		var data = new DataView(buffer);
 		if (data.byteLength < 20 || data.getUint32(0, true) !== 4)
@@ -161,10 +261,26 @@ var Rr4Decode = {
 		var strides = [64, 68, 48, 52];
 		var xyOffsets = [0, 8, 12, 20];
 		var zOffsets = [4, 6, 16, 18];
-		for (var stream = 4; stream <= 7; stream++) {
+		function textureWindow(offset) {
+			var command = data.getUint32(offset, true);
+			if ((command >>> 24) !== 0xe2)
+				throw new Error("Fenêtre de texture R4 invalide.");
+			return [
+				((command >>> 10) & 31) * 8,
+				((command >>> 15) & 31) * 8,
+				256 - (command & 31) * 8,
+				256 - ((command >>> 5) & 31) * 8
+			];
+		}
+		var quadStreams = [0, 1, 2, 3, 4, 5, 6, 7, 11, 12, 13, 14];
+		for (var streamIndex = 0; streamIndex < quadStreams.length; streamIndex++) {
+			var stream = quadStreams[streamIndex];
 			var start = relativeOffset + sections[stream];
 			var end = relativeOffset + sections[stream + 1];
-			var stride = strides[stream - 4];
+			var lit = stream >= 11;
+			var streamType = lit ? stream - 11 : stream % 4;
+			var stride = lit ? [68, 72, 52, 56][streamType] : strides[streamType];
+			var uvOffset = lit ? (streamType < 2 ? 48 : 32) : 24;
 			if ((end - start) % stride !== 0)
 				throw new Error("Flux de géométrie de circuit R4 tronqué : " + stream + ".");
 			for (var primitive = start; primitive < end; primitive += stride) {
@@ -176,37 +292,93 @@ var Rr4Decode = {
 						data.getInt16(primitive + zOffsets[vertex], true) + 32768
 					]);
 				}
-				var window = null;
-				if (stream === 5 || stream === 7) {
-					var command = data.getUint32(primitive + stride - 4, true);
-					if ((command >>> 24) !== 0xe2)
-						throw new Error("Fenêtre de texture R4 invalide.");
-					window = [
-						((command >>> 10) & 31) * 8,
-						((command >>> 15) & 31) * 8,
-						256 - (command & 31) * 8,
-						256 - ((command >>> 5) & 31) * 8
-					];
-				}
-				var colorOffsets = stream < 6 ? [48, 52, 56, 60] : [44, 44, 44, 44];
+				var window = streamType === 1 || streamType === 3 ?
+					textureWindow(primitive + stride - 4) : null;
+				var colorOffset = lit ? uvOffset + 16 : 44;
+				var colorOffsets = !lit && streamType < 2 ? [48, 52, 56, 60] :
+					[colorOffset, colorOffset, colorOffset, colorOffset];
 				decorations.push({
+					stream: stream,
+					sourceIndex: (primitive - start) / stride,
+					orderingBias: data.getUint8(primitive + uvOffset + 13),
 					vertices: vertices,
 					colors: colorOffsets.map(function(offset) {
 						return [data.getUint8(primitive + offset), data.getUint8(primitive + offset + 1),
 							data.getUint8(primitive + offset + 2)];
 					}),
-					uvs: [24, 28, 32, 34].map(function(offset) {
-						return [data.getUint8(primitive + offset), data.getUint8(primitive + offset + 1)];
+					uvs: [0, 4, 8, 10].map(function(offset) {
+						return [data.getUint8(primitive + uvOffset + offset), data.getUint8(primitive + uvOffset + offset + 1)];
 					}),
-					clut: data.getUint16(primitive + 26, true),
-					tpage: data.getUint16(primitive + 30, true),
+					clut: data.getUint16(primitive + uvOffset + 2, true),
+					tpage: data.getUint16(primitive + uvOffset + 6, true),
 					window: window
 				});
 			}
 		}
+		for (var triangleStream = 9; triangleStream <= 10; triangleStream++) {
+			var triangleStart = relativeOffset + sections[triangleStream];
+			var triangleEnd = relativeOffset + sections[triangleStream + 1];
+			var triangleStride = triangleStream === 9 ? 52 : 56;
+			if ((triangleEnd - triangleStart) % triangleStride !== 0)
+				throw new Error("Flux de géométrie de circuit R4 tronqué : " + triangleStream + ".");
+			for (var triangle = triangleStart; triangle < triangleEnd; triangle += triangleStride) {
+				var triangleVertices = [];
+				for (var corner = 0; corner < 3; corner++) {
+					triangleVertices.push([
+						data.getInt16(triangle + xyOffsets[corner], true) + 32768,
+						data.getInt16(triangle + xyOffsets[corner] + 2, true),
+						data.getInt16(triangle + zOffsets[corner], true) + 32768
+					]);
+				}
+				decorations.push({
+					stream: triangleStream,
+					sourceIndex: (triangle - triangleStart) / triangleStride,
+					orderingBias: data.getUint8(triangle + 19),
+					vertices: triangleVertices,
+					colors: [40, 44, 48].map(function(offset) {
+						return [data.getUint8(triangle + offset), data.getUint8(triangle + offset + 1),
+							data.getUint8(triangle + offset + 2)];
+					}),
+					uvs: [20, 24, 28].map(function(offset) {
+						return [data.getUint8(triangle + offset), data.getUint8(triangle + offset + 1)];
+					}),
+					clut: data.getUint16(triangle + 22, true),
+					tpage: data.getUint16(triangle + 26, true),
+					window: triangleStream === 10 ? textureWindow(triangle + 52) : null
+				});
+			}
+		}
+		var sprites = [];
+		var spriteStart = relativeOffset + sections[8];
+		var spriteEnd = relativeOffset + sections[9];
+		if ((spriteEnd - spriteStart) % 48 !== 0)
+			throw new Error("Flux de sprites de circuit R4 tronqué : 8.");
+		for (var sprite = spriteStart; sprite < spriteEnd; sprite += 48) {
+			var spriteVertices = [];
+			for (var spriteVertex = 0; spriteVertex < 4; spriteVertex++) {
+				spriteVertices.push([
+					data.getInt16(sprite + xyOffsets[spriteVertex], true),
+					data.getInt16(sprite + xyOffsets[spriteVertex] + 2, true),
+					data.getInt16(sprite + zOffsets[spriteVertex], true)
+				]);
+			}
+			var spriteColor = [data.getUint8(sprite + 44), data.getUint8(sprite + 45), data.getUint8(sprite + 46)];
+			sprites.push({
+				vertices: spriteVertices,
+				position: [data.getInt16(sprite + 40, true) + 32768, data.getInt16(sprite + 42, true),
+					data.getInt16(sprite + 38, true) + 32768],
+				colors: [spriteColor, spriteColor, spriteColor, spriteColor],
+				uvs: [24, 28, 32, 34].map(function(offset) {
+					return [data.getUint8(sprite + offset), data.getUint8(sprite + offset + 1)];
+				}),
+				clut: data.getUint16(sprite + 26, true),
+				tpage: data.getUint16(sprite + 30, true),
+				window: null
+			});
+		}
 		if (!decorations.length)
 			throw new Error("Géométrie fixe de circuit R4 absente.");
-		return { type: type, samples: samples, decorations: decorations, ambient: ambient,
+		return { type: type, samples: samples, decorations: decorations, sprites: sprites, ambient: ambient,
 			sky: this.parseSky(data, offsets[1], offsets[2]) };
 	},
 

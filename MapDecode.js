@@ -1,6 +1,9 @@
 "use strict";
 
 var MapDecode = {
+	trackMapHash: "b1dbd3ee379375d3baef3ef4ae00d080d405aac74dae80bbc3dfb0f0dccd5c2b",
+	trackIndexHash: "6f9508a7d08afb4c7ecab258662ea9b8fceee4d3c550343336a73a2e5e803489",
+
 	parse: function(buffer) {
 		var data = new DataView(buffer);
 		if (data.byteLength < 4)
@@ -73,6 +76,20 @@ var MapDecode = {
 
 	worldVertex: function(origin, point) {
 		return [61440 - (origin[0] + point[0] / 4), -point[1] / 4, origin[1] + point[2] / 4];
+	},
+
+	parseTrack: function(buffer) {
+		var data = new DataView(buffer);
+		var start = 0x48564, count = 256, stride = 20;
+		if (data.byteLength < start + count * stride)
+			throw new Error("Tracé du circuit tronqué dans SCUS-943.00.");
+		var points = [];
+		for (var i = 0; i < count; i++) {
+			var offset = start + i * stride;
+			points.push([data.getInt32(offset, true) / 16384, data.getInt16(offset + 8, true) / 2,
+				data.getInt32(offset + 4, true) / 16384]);
+		}
+		return points;
 	},
 
 	findImages: function(primitive, images) {

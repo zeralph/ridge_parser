@@ -17,7 +17,7 @@ var Sceneview = function(containerId, width, height){
 };
 
 Sceneview.prototype.centerOnClick = function(event) {
-	if (this.activeCameraMode === 'fly' && this.cameraSpline)
+	if ((this.rr4Fly && this.rr4Fly.active) || (this.activeCameraMode === 'fly' && this.cameraSpline))
 		return;
 
 	var rect = this.renderer.domElement.getBoundingClientRect();
@@ -29,6 +29,7 @@ Sceneview.prototype.centerOnClick = function(event) {
 	);
 	this.scene.updateMatrixWorld(true);
 	this.camera.updateMatrixWorld(true);
+	this.updateRr4Billboards(this.camera);
 
 	var meshes = [];
 	function collectMeshes(object) {
@@ -66,6 +67,8 @@ Sceneview.prototype.clear = function()
 {
 	console.log("clear");
 	this.scene = new THREE.Scene();
+	this.rr4BillboardMesh = null;
+	this.rr4Fly = null;
 	this.camera = new THREE.PerspectiveCamera( 90, this.width / this.height, 0.1, 5000000 );
 	this.camera.position.set(-500,500,-500);
 	this.camera.up = new THREE.Vector3(0,1,0);
@@ -109,8 +112,15 @@ Sceneview.prototype.animate = function()
 		this.updateWeaponMaterial(time);
 	}
 
+	if (this.rr4Fly && this.rr4Fly.active) {
+		if (document.hidden)
+			this.rr4Fly.lastTime = null;
+		else
+			this.advanceRr4Fly(time);
+		this.renderScene(this.camera);
+	}
 	// Camera is in fly mode and we have a spline to follow?
-	if( this.activeCameraMode === 'fly' && this.cameraSpline ) {
+	else if( this.activeCameraMode === 'fly' && this.cameraSpline ) {
 	
 		var elapsedTime = time - this.startTime;
 		var elapsedTicks = elapsedTime / 1000 * 60;
@@ -135,7 +145,162 @@ Sceneview.prototype.animate = function()
 	}
 };
 
+Sceneview.prototype.setRr4FlyPath = function(samples) {
+	var points = samples.map(function(sample) {
+		if (!sample.left || !sample.right ||
+			![sample.x, sample.z, sample.height, sample.left[0], sample.left[1], sample.right[0], sample.right[1]].every(Number.isFinite))
+			throw new Error("Échantillon de route invalide pour la caméra fly-through.");
+		return [
+			sample.x + (sample.left[0] + sample.right[0]) / 2,
+			-sample.height / 4,
+			-sample.z - (sample.left[1] + sample.right[1]) / 2
+		];
+	});
+	this.setFlyPath(points, -1);
+};
+
+Sceneview.prototype.setFlyPath = function(coordinates, normalDirection) {
+	if (normalDirection !== 1 && normalDirection !== -1)
+		throw new Error("Sens de parcours invalide pour la caméra fly-through.");
+	var points = [];
+	coordinates.forEach(function(coordinate) {
+		if (!coordinate || coordinate.length !== 3 || !coordinate.every(Number.isFinite))
+			throw new Error("Point invalide pour la caméra fly-through.");
+		var point = new THREE.Vector3(coordinate[0], coordinate[1], coordinate[2]);
+		if (!points.length || point.distanceToSquared(points[points.length - 1]) > 0)
+			points.push(point);
+	});
+	if (points.length > 1 && points[0].distanceToSquared(points[points.length - 1]) === 0)
+		points.pop();
+	if (points.length < 2)
+		throw new Error("Le circuit ne contient pas assez de points distincts pour la caméra fly-through.");
+
+	var distances = [0];
+	for (var i = 0; i < points.length; i++)
+		distances.push(distances[i] + points[i].distanceTo(points[(i + 1) % points.length]));
+	this.stopRr4Fly();
+	this.rr4Fly = { points: points, distances: distances, length: distances[points.length], active: false,
+		normalDirection: normalDirection };
+};
+
+Sceneview.prototype.rr4FlyPoint = function(distance) {
+	var path = this.rr4Fly;
+	distance = ((distance % path.length) + path.length) % path.length;
+	var low = 0, high = path.points.length;
+	while (low + 1 < high) {
+		var middle = Math.floor((low + high) / 2);
+		if (path.distances[middle] <= distance)
+			low = middle;
+		else
+			high = middle;
+	}
+	var fraction = (distance - path.distances[low]) / (path.distances[low + 1] - path.distances[low]);
+	return path.points[low].clone().lerp(path.points[(low + 1) % path.points.length], fraction);
+};
+
+Sceneview.prototype.nearestRr4FlyDistance = function(height) {
+	var path = this.rr4Fly;
+	var camera = this.camera.position;
+	var roadHeight = camera.y - height;
+	var bestHorizontal = Infinity, bestVertical = Infinity, bestDistance = 0;
+	for (var i = 0; i < path.points.length; i++) {
+		var start = path.points[i], end = path.points[(i + 1) % path.points.length];
+		var dx = end.x - start.x, dy = end.y - start.y, dz = end.z - start.z;
+		var horizontalLength = dx * dx + dz * dz;
+		var fraction = horizontalLength ?
+			((camera.x - start.x) * dx + (camera.z - start.z) * dz) / horizontalLength :
+			(roadHeight - start.y) / dy;
+		fraction = Math.max(0, Math.min(1, fraction));
+		var x = start.x + dx * fraction - camera.x;
+		var z = start.z + dz * fraction - camera.z;
+		var y = start.y + dy * fraction - roadHeight;
+		var horizontal = x * x + z * z, vertical = y * y;
+		if (horizontal < bestHorizontal - 1e-9 ||
+			(Math.abs(horizontal - bestHorizontal) <= 1e-9 && vertical < bestVertical)) {
+			bestHorizontal = horizontal;
+			bestVertical = vertical;
+			bestDistance = path.distances[i] + fraction * (path.distances[i + 1] - path.distances[i]);
+		}
+	}
+	return bestDistance;
+};
+
+Sceneview.prototype.updateRr4FlyCamera = function() {
+	var path = this.rr4Fly;
+	var position = this.rr4FlyPoint(path.distance);
+	var direction = path.direction === "normal" ? path.normalDirection : -path.normalDirection;
+	var target = this.rr4FlyPoint(path.distance + direction * Math.min(300, path.length / 4));
+	position.y += path.height;
+	target.y += path.height;
+	this.camera.position.copy(position);
+	this.camera.up.set(0, 1, 0);
+	this.camera.lookAt(target);
+	path.target = target;
+};
+
+Sceneview.prototype.configureRr4Fly = function(speed, height, direction) {
+	if (!this.rr4Fly || !Number.isFinite(speed) || speed < 0 ||
+		!Number.isFinite(height) || height <= 0 || (direction !== "normal" && direction !== "inverse"))
+		throw new Error("Réglages de la caméra fly-through invalides.");
+	this.rr4Fly.speed = speed;
+	this.rr4Fly.height = height;
+	this.rr4Fly.direction = direction;
+	if (this.rr4Fly.active)
+		this.updateRr4FlyCamera();
+};
+
+Sceneview.prototype.startRr4Fly = function(speed, height, direction) {
+	this.configureRr4Fly(speed, height, direction);
+	var path = this.rr4Fly;
+	if (path.active)
+		return;
+	path.distance = this.nearestRr4FlyDistance(height);
+	path.lastTime = null;
+	path.controlsEnabled = this.controls.enabled;
+	path.near = this.camera.near;
+	path.far = this.camera.far;
+	path.active = true;
+	this.controls.enabled = false;
+	this.viewMode = 'rr4-fly';
+	this.camera.near = Math.min(this.camera.near, 1);
+	if (this.boundsMinimum && this.boundsMaximum)
+		this.camera.far = Math.max(this.camera.far, this.boundsMaximum.distanceTo(this.boundsMinimum) * 2 + height);
+	this.camera.updateProjectionMatrix();
+	this.updateRr4FlyCamera();
+};
+
+Sceneview.prototype.advanceRr4Fly = function(time) {
+	var path = this.rr4Fly;
+	if (path.lastTime !== null) {
+		var elapsed = Math.max(0, (time - path.lastTime) / 1000);
+		var direction = path.direction === "normal" ? path.normalDirection : -path.normalDirection;
+		path.distance = ((path.distance + direction * path.speed * elapsed) % path.length + path.length) % path.length;
+	}
+	path.lastTime = time;
+	this.updateRr4FlyCamera();
+};
+
+Sceneview.prototype.stopRr4Fly = function() {
+	var path = this.rr4Fly;
+	if (!path || !path.active)
+		return;
+	path.active = false;
+	this.controls.enabled = path.controlsEnabled;
+	this.controls.target.copy(path.target);
+	this.camera.near = path.near;
+	this.camera.far = path.far;
+	this.camera.updateProjectionMatrix();
+	this.viewMode = 'orbit';
+	this.controls.update();
+};
+
+Sceneview.prototype.clearRr4FlyPath = function() {
+	this.stopRr4Fly();
+	this.rr4Fly = null;
+};
+
 Sceneview.prototype.renderScene = function(camera) {
+	this.updateRr4Billboards(camera);
 	if (!this.skyScene) {
 		this.renderer.render(this.scene, camera);
 		return;
@@ -150,6 +315,39 @@ Sceneview.prototype.renderScene = function(camera) {
 	this.renderer.autoClear = false;
 	this.renderer.render(this.scene, camera);
 	this.renderer.autoClear = true;
+};
+
+Sceneview.prototype.updateRr4Billboards = function(camera) {
+	var mesh = this.rr4BillboardMesh;
+	if (!mesh)
+		return;
+	var forward = camera.getWorldDirection();
+	var length = Math.sqrt(forward.x * forward.x + forward.z * forward.z);
+	if (length < 1e-8) {
+		var right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.getWorldQuaternion());
+		length = Math.sqrt(right.x * right.x + right.z * right.z);
+		if (length < 1e-8)
+			return;
+		forward.set(right.z / length, 0, -right.x / length);
+	} else {
+		forward.x /= length;
+		forward.z /= length;
+	}
+	if (mesh.userData.rr4ForwardX === forward.x && mesh.userData.rr4ForwardZ === forward.z)
+		return;
+	mesh.userData.rr4ForwardX = forward.x;
+	mesh.userData.rr4ForwardZ = forward.z;
+	mesh.userData.rr4Sprites.forEach(function(sprite, index) {
+		sprite.vertices.forEach(function(vertex, corner) {
+			mesh.geometry.vertices[index * 4 + corner].set(
+				sprite.position[0] + (-forward.z * vertex[0] + forward.x * vertex[2]) / 4,
+				-sprite.position[1] - vertex[1] / 4,
+				-sprite.position[2] + (forward.x * vertex[0] + forward.z * vertex[2]) / 4
+			);
+		});
+	});
+	mesh.geometry.verticesNeedUpdate = true;
+	mesh.geometry.computeBoundingSphere();
 };
 
 Sceneview.prototype.setSky = function(pixels) {

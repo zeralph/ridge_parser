@@ -1,6 +1,7 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
@@ -63,6 +64,39 @@ const invalidIndex = idx.slice(0);
 new DataView(invalidIndex).setInt16(42 * 2, 258, true);
 assert.throws(() => context.MapDecode.placeSections(sectors, invalidIndex), /invalide/);
 
+const exe = arrayBuffer("ridge_racer/SCUS-943.00");
+const track = context.MapDecode.parseTrack(exe);
+assert.equal(crypto.createHash("sha256").update(Buffer.from(map)).digest("hex"), context.MapDecode.trackMapHash);
+assert.equal(crypto.createHash("sha256").update(Buffer.from(idx)).digest("hex"), context.MapDecode.trackIndexHash);
+assert.equal(track.length, 256);
+assert.deepEqual(Array.from(track[0]), [7934.23876953125, 0, 28264.210876464844]);
+assert.deepEqual(Array.from(track[120]), [26316.45526123047, 681, 24684.58673095703]);
+assert.throws(() => context.MapDecode.parseTrack(exe.slice(0, 0x48564 + 256 * 20 - 1)), /tronqué/);
+const triangles = placed.flatMap(section => section.primitives.flatMap(primitive =>
+	[[0, 1, 2], [2, 1, 3]].map(indices => {
+		const [a, b, c] = indices.map(index => context.MapDecode.worldVertex(section.origin, primitive.vertices[index]));
+		const determinant = (b[2] - c[2]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[2] - c[2]);
+		return { a, b, c, determinant,
+			minX: Math.min(a[0], b[0], c[0]), maxX: Math.max(a[0], b[0], c[0]),
+			minZ: Math.min(a[2], b[2], c[2]), maxZ: Math.max(a[2], b[2], c[2]) };
+	}))).filter(triangle => triangle.determinant !== 0);
+track.forEach((start, index) => {
+	const end = track[(index + 1) % track.length];
+	assert.ok(Math.hypot(end[0] - start[0], end[2] - start[2]) < 540,
+		`Discontinuité du tracé au point ${index}`);
+	for (const fraction of [0, 0.25, 0.5, 0.75]) {
+		const [x, y, z] = start.map((value, axis) => value + (end[axis] - value) * fraction);
+		assert.ok(triangles.some(({ a, b, c, determinant, minX, maxX, minZ, maxZ }) => {
+			if (x < minX || x > maxX || z < minZ || z > maxZ)
+				return false;
+			const u = ((b[2] - c[2]) * (x - c[0]) + (c[0] - b[0]) * (z - c[2])) / determinant;
+			const v = ((c[2] - a[2]) * (x - c[0]) + (a[0] - c[0]) * (z - c[2])) / determinant;
+			const w = 1 - u - v;
+			return u >= -1e-8 && v >= -1e-8 && w >= -1e-8 && Math.abs(u * a[1] + v * b[1] + w * c[1] - y) <= 8;
+		}), `Chaussée manquante sous le tracé au point ${index}, fraction ${fraction}`);
+	}
+});
+
 const images = [];
 for (let bank = 0; bank < 5; bank++) {
 	const buffer = arrayBuffer("ridge_racer/TEX" + bank + ".TMS");
@@ -97,4 +131,43 @@ for (const sector of sectors) {
 	}
 }
 assert.deepEqual(totals, [3677, 3060, 0]);
-console.log("MAP.RRM : 258 blocs, 6 737 primitives et 3 060 associations uniques vérifiés.");
+
+vm.runInContext(fs.readFileSync(path.join(root, "MapView.js"), "utf8"), context);
+context.ObjDecode = { executableHash: crypto.createHash("sha256").update(Buffer.from(exe)).digest("hex") };
+context.window = { crypto: crypto.webcrypto };
+let fetchCount = 0;
+context.fetch = async () => { fetchCount++; return { ok: true, arrayBuffer: async () => exe }; };
+const flyStatus = {};
+context.document = { getElementById() { return flyStatus; } };
+const group = {};
+context.m_object = group;
+context.m_sourceType = "map";
+let flyPath;
+context.m_viewer = { setFlyPath(points, direction) { flyPath = { points, direction }; } };
+context.syncRr4FlyButton = function() {};
+async function checkMapFlyLoading() {
+	await context.loadMapFlyPath(group, map, idx);
+	assert.equal(flyPath.points.length, 256);
+	assert.equal(flyPath.direction, 1);
+	assert.match(flyStatus.textContent, /256 points/);
+	assert.equal(fetchCount, 1);
+	context.m_object = {};
+	flyPath = null;
+	await context.loadMapFlyPath(group, map, idx);
+	assert.equal(flyPath, null, "Un chargement périmé ne doit pas changer la caméra");
+	assert.equal(fetchCount, 1);
+	context.m_object = group;
+	await context.loadMapFlyPath(group, map.slice(0, -1), idx);
+	assert.match(flyStatus.textContent, /MAP.RRM ou IDX.HED non reconnue/);
+	context.m_mapExecutablePromise = null;
+	context.fetch = async () => ({ ok: true, arrayBuffer: async () => exe.slice(0, -1) });
+	await context.loadMapFlyPath(group, map, idx);
+	assert.match(flyStatus.textContent, /SCUS-943.00 non reconnue/);
+	assert.equal(context.m_mapExecutablePromise, null);
+}
+checkMapFlyLoading().then(() => {
+	console.log("MAP.RRM : placement, textures et trajectoire native vérifiés.");
+}).catch(error => {
+	console.error(error);
+	process.exitCode = 1;
+});

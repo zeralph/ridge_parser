@@ -4,6 +4,8 @@
 *.[bB][iI][nN].*
 *.[sS][tT][rR]
 *.[cC][nN][fF]
+*.[sS][eE][qQ]
+*.[eE][xX][eE]
 *.97
 *.[hH][eE][dD]
 *.[rR][rR][mM]
@@ -14,6 +16,7 @@
 *.[vV][bB]
 *.[vV][hH]
 *.00
+*.14
 *.[tT][mM][sS]
 *.DS_Store
 .DS_Store
